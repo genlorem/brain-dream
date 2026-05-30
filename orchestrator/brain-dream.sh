@@ -142,6 +142,13 @@ DREAM_RECENT_WEIGHT_PCT="${DREAM_RECENT_WEIGHT_PCT:-70}"
 # Дефолт 120 = ~30K токенов промпта при средней длине инсайта.
 DREAM_SYNTH_TOP_N="${DREAM_SYNTH_TOP_N:-120}"
 
+# NREM/REM-фазы сна (биологический аналог).
+# DREAM_NREM_PASSES первых итераций идут в NREM-режиме: узкие consolidating
+# линзы (problem/gap/stalled), малые сэмплы, агрессивный recency-bias.
+# Остальные — REM: широкие creative линзы, большие сэмплы, чаще cross-проходы.
+# 0 = выкл (единая фаза, как раньше).
+DREAM_NREM_PASSES="${DREAM_NREM_PASSES:-20}"
+
 LOG_FILE="$HOME/life/state/logs/brain-dream.log"
 GEMINI_SH="$ORCHESTRATOR_DIR/gemini.sh"
 UTC_DATE="$(date -u +%F)"
@@ -836,6 +843,7 @@ ids_json_for_paths() {
   fi
 }
 
+# Все линзы (legacy uniform-режим использует именно этот массив).
 LENS_KEYS=(
   "problem"
   "gap"
@@ -852,6 +860,25 @@ LENS_PROMPTS=(
   "Найди белые пятна: чего не хватает, какие знания, решения или проверки отсутствуют."
   "Найди противоречия между нодами, решениями, целями или предположениями."
   "Найди, что застряло, заброшено или требует следующего действия."
+  "Найди переносимые аналогии: какие идеи из одного кластера/домена можно применить в другом."
+  "Найди неочевидные риски, слабые сигналы и будущие проблемы."
+  "Найди 10x-возможности: малые действия или инсайты с непропорционально большим эффектом."
+  "Найди неочевидное важное открытие: то, что трудно заметить при обычном чтении."
+)
+
+# NREM-линзы — узкие, consolidating. Цель: усилить уверенность в уже
+# известном через повтор + добить confidence существующих хешей.
+NREM_LENS_KEYS=("problem" "gap" "stalled")
+NREM_LENS_PROMPTS=(
+  "Найди проблемы и болевые точки, которые прямо или косвенно видны в этих нодах. Фокус на свежих заметках."
+  "Найди белые пятна: чего не хватает, какие знания, решения или проверки отсутствуют. Фокус на недавно изменённом."
+  "Найди, что застряло, заброшено или требует следующего действия. Особенно — давние задачи без движения."
+)
+
+# REM-линзы — широкие, creative. Цель: новые ассоциации, неочевидные связи.
+REM_LENS_KEYS=("contradiction" "cross-analogy" "risk" "opportunity" "wow")
+REM_LENS_PROMPTS=(
+  "Найди противоречия между нодами, решениями, целями или предположениями."
   "Найди переносимые аналогии: какие идеи из одного кластера/домена можно применить в другом."
   "Найди неочевидные риски, слабые сигналы и будущие проблемы."
   "Найди 10x-возможности: малые действия или инсайты с непропорционально большим эффектом."
@@ -1023,17 +1050,41 @@ launch_iteration() {
   local cluster_count="$2"
   local lens_index lens_key lens_text desired mode domain_label context allowed_ids_json
   local first_index second_index line first_domain first_cluster second_domain second_cluster
-  local -a selected selected_a selected_b
+  local phase cross_modulo
+  local -a selected selected_a selected_b lens_arr prompt_arr
 
-  lens_index=$((iteration % ${#LENS_KEYS[@]}))
-  lens_key="${LENS_KEYS[$lens_index]}"
-  lens_text="${LENS_PROMPTS[$lens_index]}"
-  desired=$((3 + (iteration % 6)))
+  # Phase selection: NREM первые DREAM_NREM_PASSES итераций (Gemini phase),
+  # REM остальные. Для Sonnet phase (siter 0..N) ровно те же inputs.
+  if (( DREAM_NREM_PASSES > 0 )) && (( iteration < DREAM_NREM_PASSES )); then
+    phase="nrem"
+    lens_arr=("${NREM_LENS_KEYS[@]}")
+    prompt_arr=("${NREM_LENS_PROMPTS[@]}")
+    desired=$((3 + (iteration % 3)))     # 3-5 нод
+    cross_modulo=0                        # cross выключен в NREM
+    export DREAM_RECENT_WEIGHT_PCT=90    # агрессивный recency-bias
+  else
+    phase="rem"
+    if (( DREAM_NREM_PASSES > 0 )); then
+      lens_arr=("${REM_LENS_KEYS[@]}")
+      prompt_arr=("${REM_LENS_PROMPTS[@]}")
+    else
+      # legacy режим: все линзы вместе
+      lens_arr=("${LENS_KEYS[@]}")
+      prompt_arr=("${LENS_PROMPTS[@]}")
+    fi
+    desired=$((5 + (iteration % 5)))     # 5-9 нод (большие сэмплы)
+    cross_modulo=3                        # cross каждый 3-й проход
+    export DREAM_RECENT_WEIGHT_PCT="${_DREAM_RECENT_WEIGHT_PCT_BASE:-70}"
+  fi
+
+  lens_index=$((iteration % ${#lens_arr[@]}))
+  lens_key="${lens_arr[$lens_index]}"
+  lens_text="${prompt_arr[$lens_index]}"
   mode="single"
 
-  if ((cluster_count >= 2 && iteration % 5 == 4)); then
+  if (( cross_modulo > 0 )) && ((cluster_count >= 2 && iteration % cross_modulo == cross_modulo - 1)); then
     mode="cross"
-    desired=$((4 + (iteration % 5)))
+    desired=$((desired + 2))
     first_index=$((iteration % cluster_count))
     second_index="$(pick_second_cluster_index "$first_index" "$cluster_count")"
 
@@ -1071,7 +1122,7 @@ launch_iteration() {
   PIDS+=("$!")
   LAUNCHED=$((LAUNCHED + 1))
 
-  log "stage=${RUN_ENGINE:-gemini} iterations_launched=$LAUNCHED runs=$RUNS active=${#PIDS[@]} mode=$mode lens=$lens_key target=\"$domain_label\""
+  log "stage=${RUN_ENGINE:-gemini} phase=$phase iterations_launched=$LAUNCHED runs=$RUNS active=${#PIDS[@]} mode=$mode lens=$lens_key target=\"$domain_label\""
 }
 
 # Дедупликация кандидатов против registry .insight-hashes.jsonl.
@@ -1719,7 +1770,13 @@ main() {
   check_dependencies
   DEADLINE_EPOCH="$(parse_deadline_epoch "$DREAM_DEADLINE_UTC")"
 
-  log "stage=start domains=\"$DREAM_DOMAINS\" max_runs=$DREAM_MAX_RUNS deadline=${DREAM_DEADLINE_UTC:-none} concurrency=$DREAM_CONCURRENCY"
+  # Сохраняем базовое значение recency-bias чтобы REM-фаза восстанавливала его
+  # после NREM-перезаписи. Если пользователь дал DREAM_RECENT_WEIGHT_PCT=50,
+  # REM-фаза вернётся к 50, а не к дефолтному 70.
+  _DREAM_RECENT_WEIGHT_PCT_BASE="${DREAM_RECENT_WEIGHT_PCT:-70}"
+  export _DREAM_RECENT_WEIGHT_PCT_BASE
+
+  log "stage=start domains=\"$DREAM_DOMAINS\" max_runs=$DREAM_MAX_RUNS deadline=${DREAM_DEADLINE_UTC:-none} concurrency=$DREAM_CONCURRENCY nrem_passes=$DREAM_NREM_PASSES"
 
   STAGE="collect"
   log "stage=collect event=start"
