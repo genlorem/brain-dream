@@ -30,13 +30,49 @@ The biological analogue of sleep is **active**: hippocampal replay, synaptic hom
 
 ## Current status (2026-05-30)
 
-- ✅ Working orchestrator with money cap (`~/life/scripts/brain-dream.sh`, will migrate here)
-- ✅ Single TG output, Dream node in isolated `dreams` domain
-- ✅ Gemini vs Sonnet experiment infrastructure (correct subscription-vs-API accounting)
-- 🚧 Repo scaffolding (this phase)
-- 📝 Roadmap: 8 phases in [`docs/01-from-fabric.md`](docs/01-from-fabric.md)
-- 📝 30 expansion scenarios + top-10 in [`docs/02-top-scenarios.md`](docs/02-top-scenarios.md)
-- 📝 Agent plugin contract in [`docs/03-agents-architecture.md`](docs/03-agents-architecture.md)
+### Orchestrator (`orchestrator/`)
+- ✅ Adaptive trigger (`dream-should-run.sh`) — runs only on threshold time or new-nodes accumulation.
+- ✅ Recency-weighted sampling (90% NREM / 70% REM bias toward freshly modified nodes).
+- ✅ Money cap (Gemini real API) + session-share cap (Sonnet via subscription).
+- ✅ NREM + REM phases — narrow consolidation (lens problem/gap/stalled) + wide creative (cross-analogy/wow/opportunity/risk).
+- ✅ Content-hash dedup across nights + insight registry (`.insight-hashes.jsonl`).
+- ✅ Confidence scoring (0.3–1.0) on every insight + bump on repeat.
+- ✅ Provenance per insight (dream_id, iteration, lens, mode, source nodes, model, prompt version).
+- ✅ Active consolidation: `relates-to` + `continues-in` (Jaccard ≥ 0.3) edges in dream nodes (isolated `dreams` domain — never mutates source nodes).
+- ✅ Single TG photo-message output (cover + top-10 caption).
+- ✅ Synthesis input pruning (top-N candidates by confidence — from introspector proposal #2).
+
+### Agents (`agents/`)
+- ✅ `dream-introspector` — weekly self-improvement loop (analyzes own dreams + code → proposes improvements). Plugin contract. Guards.
+- ✅ `dream-critic` — weekly Sonnet validator → promotion to `dreams/permanent/`. Plugin contract. Guards.
+
+### Library (`lib/`)
+- ✅ `content-hash.sh` — normalize + sha256-16 for insight dedup.
+- ✅ `insight-hashes.sh` — registry manager (has/bump/append/compact).
+- ✅ `guards.sh` — 5-layer protection for all agents (source-filter / rate-limit / cost-cb / depth / kill-switch).
+
+### Tools (`tools/`)
+- ✅ `dream-feedback` — CLI for marking insights useful/noise/known. KPI loop closure.
+
+### Cron schedule (UTC)
+| When | What |
+|---|---|
+| Daily 18:00 | Adaptive sleep (only runs if threshold met) |
+| Sunday 04:00 | dream-introspector |
+| Sunday 12:00 | dream-critic |
+
+### Design history (`docs/`)
+- 📝 [01-from-fabric.md](docs/01-from-fabric.md) — extracted ideas from Fabric autoDream phase 5
+- 📝 [02-top-scenarios.md](docs/02-top-scenarios.md) — 30 scenarios scored, top-10 with dependency graph
+- 📝 [03-agents-architecture.md](docs/03-agents-architecture.md) — detailed plugin contract
+
+### Not yet
+- 📋 Continuous-learning daytime observer (fswatch → light Gemini → observations)
+- 📋 Pruning agent (decay by confidence × age)
+- 📋 Auto-patcher (introspector → real PRs)
+- 📋 MCP exposure for agents (callable from any Claude session)
+- 📋 TG inline-button KPI (currently via `dream-feedback` CLI)
+- 📋 Dreams domain registration in MCP brain (`TM_BRAIN_ROOTS` + reindex) — one-time operator step
 
 ## Repo layout
 
