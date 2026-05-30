@@ -125,6 +125,11 @@ DREAM_NODE_ROOT="${DREAM_NODE_ROOT:-$HOME/brain/dreams}"
 # обложка + media-group инсайтов).
 DREAM_TG_MODE="${DREAM_TG_MODE:-legacy}"
 
+# Recency-bias при сэмплинге нод в каждом проходе: % выборки из «свежей»
+# половины (по mtime). 70% = свежие имеют приоритет, но не монополию. 50% =
+# чисто uniform. Биологический аналог — hippocampal replay свежих эпизодов.
+DREAM_RECENT_WEIGHT_PCT="${DREAM_RECENT_WEIGHT_PCT:-70}"
+
 LOG_FILE="$HOME/life/state/logs/brain-dream.log"
 GEMINI_SH="$ORCHESTRATOR_DIR/gemini.sh"
 UTC_DATE="$(date -u +%F)"
@@ -666,9 +671,10 @@ sample_paths() {
   local cluster="$2"
   local iteration="$3"
   local desired="$4"
-  local offset count take i path
-  local -a pool extra unique
+  local count take i path mtime
+  local -a pool extra unique sorted_with_mtime
   local -A seen
+  local recent_pct recent_zone_end recent_take old_take offset_r offset_o old_size
 
   mapfile -t pool < <(awk -F '\t' -v d="$domain" -v c="$cluster" '$1 == d && $2 == c { print $3 }' "$NODES_FILE" | sort)
 
@@ -684,27 +690,46 @@ sample_paths() {
 
   for path in "${pool[@]}"; do
     [[ -z "$path" ]] && continue
-    if [[ -n "${seen[$path]:-}" ]]; then
-      continue
-    fi
+    if [[ -n "${seen[$path]:-}" ]]; then continue; fi
     seen["$path"]=1
     unique+=("$path")
   done
 
   count=${#unique[@]}
-  if ((count == 0)); then
-    return 0
-  fi
+  if ((count == 0)); then return 0; fi
 
   take="$desired"
-  if ((take > count)); then
-    take="$count"
-  fi
+  ((take > count)) && take="$count"
 
-  offset=$(((iteration * 5) % count))
-  for ((i = 0; i < take; i += 1)); do
-    printf '%s\n' "${unique[$(((offset + i) % count))]}"
+  # Recency-weighted bias: сортируем unique по mtime DESC, делим на recent-зону
+  # (первая половина) и old-зону. DREAM_RECENT_WEIGHT_PCT% от take берём из
+  # recent-зоны. При iteration-фиксированном offset = воспроизводимый сэмпл.
+  recent_pct="${DREAM_RECENT_WEIGHT_PCT:-70}"
+
+  for path in "${unique[@]}"; do
+    mtime=$(stat -c %Y "$path" 2>/dev/null || echo 0)
+    sorted_with_mtime+=("$mtime"\$'\t'"$path")
   done
+  mapfile -t unique < <(printf '%s\n' "${sorted_with_mtime[@]}" | sort -rn -t \$'\t' -k1 | cut -f2-)
+
+  recent_zone_end=$(( count / 2 ))
+  ((recent_zone_end == 0)) && recent_zone_end=1
+  recent_take=$(( take * recent_pct / 100 ))
+  ((recent_take == 0)) && recent_take=1
+  old_take=$(( take - recent_take ))
+
+  offset_r=$(( (iteration * 5) % recent_zone_end ))
+  for ((i = 0; i < recent_take; i += 1)); do
+    printf '%s\n' "${unique[$(( (offset_r + i) % recent_zone_end ))]}"
+  done
+
+  if ((old_take > 0 && count > recent_zone_end)); then
+    old_size=$(( count - recent_zone_end ))
+    offset_o=$(( (iteration * 7) % old_size ))
+    for ((i = 0; i < old_take; i += 1)); do
+      printf '%s\n' "${unique[$(( recent_zone_end + (offset_o + i) % old_size ))]}"
+    done
+  fi
 }
 
 manifest_domain_for_path() {
