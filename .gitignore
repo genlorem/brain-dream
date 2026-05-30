@@ -1,0 +1,32 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*~
+
+# Node (если будут JS-агенты)
+node_modules/
+*.log
+
+# Python (если будут py-агенты)
+__pycache__/
+*.pyc
+.venv/
+
+# Temp
+*.tmp
+.candidates.jsonl
+.dream-usage*.jsonl
+.observer-*.jsonl
+.last-run.json
+
+# Secrets — никогда
+.env
+config/*.local.env
+*-secrets.*
+
+# Тестовые артефакты
+/tmp/
+tests/snapshots/
