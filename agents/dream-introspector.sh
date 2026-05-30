@@ -21,6 +21,15 @@ AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${BRAIN_DREAM_REPO:-$(cd "$AGENT_DIR/.." && pwd)}"
 DREAM_DIR="${DREAM_NODE_ROOT:-$HOME/brain/dreams}/nodes"
 
+# 5-layer guards. Тюнинг для introspector:
+#   - кост дневной $0.30 (Sonnet с большим контекстом — недёшево)
+#   - rate-limit 1 вызов / 12ч (он еженедельный, не должен запускаться чаще)
+GUARD_COST_DAILY_USD="${GUARD_COST_DAILY_USD:-0.30}"
+GUARD_RATE_LIMIT_CALLS="${GUARD_RATE_LIMIT_CALLS:-1}"
+GUARD_RATE_LIMIT_WINDOW_MIN="${GUARD_RATE_LIMIT_WINDOW_MIN:-720}"
+# shellcheck disable=SC1091
+source "$REPO/lib/guards.sh"
+
 # Read stdin if not a tty
 INPUT="{}"
 if [ ! -t 0 ]; then
@@ -29,6 +38,9 @@ fi
 
 DRY_RUN=$(printf '%s' "$INPUT" | jq -r '.config.dry_run // false' 2>/dev/null || printf 'false')
 BUDGET_USD=$(printf '%s' "$INPUT" | jq -r '.config.model_budget_usd // 0.20' 2>/dev/null || printf '0.20')
+INVOKED_BY=$(printf '%s' "$INPUT" | jq -r '.invoked_by // "manual"' 2>/dev/null || printf 'manual')
+INPUT_DEPTH=$(printf '%s' "$INPUT" | jq -r '.input.depth // 0' 2>/dev/null || printf '0')
+export INVOKED_BY INPUT_DEPTH
 
 START_TIME=$(date +%s)
 
@@ -38,7 +50,15 @@ log() {
     "$(date -u +%FT%TZ)" "$level" "$AGENT_NAME" "$*" >&2
 }
 
-log INFO "start dry_run=$DRY_RUN budget=$BUDGET_USD repo=$REPO"
+log INFO "start dry_run=$DRY_RUN budget=$BUDGET_USD repo=$REPO invoked_by=$INVOKED_BY depth=$INPUT_DEPTH"
+
+# 5-layer guards check — exit 2 if any blocks (skipped, not error).
+if ! guards_pass_all; then
+  cat <<GUARD
+{"version":"1","agent_name":"$AGENT_NAME","status":"skipped","duration_s":$(($(date +%s)-START_TIME)),"result":{"reason":"guard_blocked"},"telemetry":{"llm_calls":[],"guards_triggered":["see_stderr"]}}
+GUARD
+  exit 2
+fi
 
 # Сбор контекста
 recent_dreams=""
@@ -155,6 +175,9 @@ result_text=$(printf '%s' "$claude_response" | jq -r '.result // empty')
 cost_usd=$(printf '%s' "$claude_response" | jq -r '.total_cost_usd // 0')
 input_tokens=$(printf '%s' "$claude_response" | jq -r '.usage.input_tokens // 0')
 output_tokens=$(printf '%s' "$claude_response" | jq -r '.usage.output_tokens // 0')
+
+# Записать расход в guard-ledger для daily cost-CB.
+guard_record_cost "$cost_usd"
 
 if [ -z "$result_text" ]; then
   log ERROR "empty_result"
