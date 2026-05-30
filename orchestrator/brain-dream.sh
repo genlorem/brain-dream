@@ -80,7 +80,18 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 if [[ "${BRAIN_DREAM_FLOCKED:-}" != "1" ]]; then
-  exec env BRAIN_DREAM_FLOCKED=1 flock -n -E 0 /tmp/brain-dream.lock "$0" "$@"
+  # -E 99 — отличаем «lock уже занят» от нормального exit, чтобы залогировать
+  # и не дать cron-job завершиться silently (раньше -E 0 маскировал ситуацию).
+  env BRAIN_DREAM_FLOCKED=1 flock -n -E 99 /tmp/brain-dream.lock "$0" "$@"
+  rc=$?
+  if (( rc == 99 )); then
+    log_file="${BRAIN_DREAM_LOG:-$HOME/life/state/logs/brain-dream.log}"
+    mkdir -p "$(dirname "$log_file")"
+    printf '%s stage=start event=skip reason=lock_held lock=/tmp/brain-dream.lock\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$log_file"
+    exit 0
+  fi
+  exit "$rc"
 fi
 
 DREAM_DOMAINS="${DREAM_DOMAINS:-travelmart personal}"
@@ -756,9 +767,9 @@ sample_paths() {
 
   for path in "${unique[@]}"; do
     mtime=$(stat -c %Y "$path" 2>/dev/null || echo 0)
-    sorted_with_mtime+=("$mtime"\$'\t'"$path")
+    sorted_with_mtime+=("$mtime"$'\t'"$path")
   done
-  mapfile -t unique < <(printf '%s\n' "${sorted_with_mtime[@]}" | sort -rn -t \$'\t' -k1 | cut -f2-)
+  mapfile -t unique < <(printf '%s\n' "${sorted_with_mtime[@]}" | sort -rn -t $'\t' -k1 | cut -f2-)
 
   recent_zone_end=$(( count / 2 ))
   ((recent_zone_end == 0)) && recent_zone_end=1
@@ -1792,7 +1803,11 @@ main() {
   STAGE="generation"
   if ((cluster_count > 0)); then
     log "stage=generation event=start"
-    while deadline_generation_open; do
+    # Cap страхует от бесконечного цикла, если sample_paths постоянно даёт
+    # пустоту (skip_empty_sample не инкрементирует LAUNCHED, значит max_runs
+    # сам по себе не остановит). По аналогии с sonnet-циклом ниже.
+    local iteration_cap=$((DREAM_MAX_RUNS * 3 + 10))
+    while deadline_generation_open && ((ITERATION < iteration_cap)); do
       while ((${#PIDS[@]} >= DREAM_CONCURRENCY)); do
         wait_for_one_job
       done
@@ -1807,6 +1822,10 @@ main() {
       # пауза между запусками держит нас заметно ниже лимита.
       sleep "${DREAM_SLEEP:-0}"
     done
+    if ((ITERATION >= iteration_cap)) && [[ "$STOP_REASON" == "running" ]]; then
+      STOP_REASON="iteration_cap"
+      log "stage=generation event=iteration_cap_hit iterations=$ITERATION launched=$LAUNCHED cap=$iteration_cap"
+    fi
   else
     STOP_REASON="no_nodes"
     log "stage=generation event=skip_no_nodes"
