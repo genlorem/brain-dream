@@ -5,6 +5,13 @@ set -euo pipefail
 # независимо от того, откуда запущен скрипт).
 ORCHESTRATOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Корень репо brain-dream — для подключения общих lib (content-hash, insight-hashes).
+BRAIN_DREAM_REPO="${BRAIN_DREAM_REPO:-$(cd "$ORCHESTRATOR_DIR/.." && pwd)}"
+# shellcheck disable=SC1091
+source "$BRAIN_DREAM_REPO/lib/content-hash.sh"
+# shellcheck disable=SC1091
+source "$BRAIN_DREAM_REPO/lib/insight-hashes.sh"
+
 # brain-dream.sh
 #
 # Ночной "сон" над knowledge graph в ~/brain:
@@ -413,13 +420,14 @@ run_sonnet_iteration() {
 
 Верни только JSONL без markdown и без пояснений вокруг.
 Нужно 1-3 инсайта, каждый на отдельной строке, строго в формате:
-{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"novelty\":\"obvious|non-obvious\",\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
+{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"novelty\":\"obvious|non-obvious\",\"confidence\":0.7,\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
 
 Правила:
 - опирайся только на source_ids из контекста;
 - source_ids должны быть id нод, которые реально использованы;
 - domain поставь \"$domain_label\" или более точный домен из контекста;
 - lens поставь \"$lens_key\";
+- confidence — твоя уверенность 0.3-1.0, что инсайт точен И применим на практике (а не просто факт). Дефолт 0.7. 0.3-0.5 = гипотеза, 0.6-0.8 = вероятно, 0.9-1.0 = уверен, действие напрашивается;
 - insight и why пиши по-русски, конкретно и без общих советов.
 
 КОНТЕКСТ НОД:
@@ -453,11 +461,39 @@ $context"
         | .source_ids = (if (.source_ids|type)=="array" then [.source_ids[]|tostring|select(($allowed|index(.))!=null)] else [] end)
         | .domain = (if (.domain|type)=="string" and (.domain|length)>0 then .domain else $domain end)
         | .lens = (if (.lens|type)=="string" and (.lens|length)>0 then .lens else $lens end)
+        | .confidence = (
+            if (.confidence | type) == "number"
+            then (if .confidence < 0.3 then 0.3
+                  elif .confidence > 1.0 then 1.0
+                  else .confidence end)
+            else 0.7
+            end
+          )
         | .model = "sonnet"
         | select((.title|type)=="string" and (.title|length)>0)
         | select((.insight|type)=="string" and (.insight|length)>0)
         | select((.why|type)=="string" and (.why|length)>0)
       ' 2>/dev/null)"; then
+      # Phase 2: content_hash + provenance (с model:sonnet).
+      local _title _insight _hash _gen_at
+      _title=$(printf '%s' "$normalized" | jq -r '.title')
+      _insight=$(printf '%s' "$normalized" | jq -r '.insight')
+      _hash=$(content_hash_insight "$_title" "$_insight")
+      _gen_at=$(date -u +%FT%TZ)
+      normalized=$(printf '%s' "$normalized" | jq -c \
+        --arg h "$_hash" \
+        --arg dream_id "dream:$UTC_DATE" \
+        --argjson iter "$iteration" \
+        --arg mode "$mode" \
+        --arg target "$domain_label" \
+        --arg model "$DREAM_SONNET_MODEL" \
+        --argjson sample_ids "$allowed_ids_json" \
+        --arg gen_at "$_gen_at" \
+        '. + {content_hash: $h, provenance: {
+           dream_id: $dream_id, iteration: $iter, mode: $mode, target: $target,
+           sample_node_ids: $sample_ids, prompt_version: "v2",
+           model: $model, generated_at: $gen_at
+        }}')
       append_candidate "$normalized"
       valid_count=$((valid_count + 1))
     fi
@@ -871,13 +907,14 @@ run_generation_iteration() {
 
 Верни только JSONL без markdown и без пояснений вокруг.
 Нужно 1-3 инсайта, каждый на отдельной строке, строго в формате:
-{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"novelty\":\"obvious|non-obvious\",\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
+{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"novelty\":\"obvious|non-obvious\",\"confidence\":0.7,\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
 
 Правила:
 - опирайся только на source_ids из контекста;
 - source_ids должны быть id нод, которые реально использованы;
 - domain поставь \"$domain_label\" или более точный домен из контекста;
 - lens поставь \"$lens_key\";
+- confidence — твоя уверенность 0.3-1.0, что инсайт точен И применим на практике (а не просто факт). Дефолт 0.7. 0.3-0.5 = гипотеза, 0.6-0.8 = вероятно, 0.9-1.0 = уверен, действие напрашивается;
 - insight и why пиши по-русски, конкретно и без общих советов."
 
   if ! response="$("$GEMINI_SH" -m "${DREAM_GEMINI_MODEL:-flash}" stdin "$instruction" <<< "$context" 2>/dev/null)"; then
@@ -910,10 +947,38 @@ run_generation_iteration() {
           )
         | .domain = (if (.domain | type) == "string" and (.domain | length) > 0 then .domain else $domain end)
         | .lens = (if (.lens | type) == "string" and (.lens | length) > 0 then .lens else $lens end)
+        | .confidence = (
+            if (.confidence | type) == "number"
+            then (if .confidence < 0.3 then 0.3
+                  elif .confidence > 1.0 then 1.0
+                  else .confidence end)
+            else 0.7
+            end
+          )
         | select((.title | type) == "string" and (.title | length) > 0)
         | select((.insight | type) == "string" and (.insight | length) > 0)
         | select((.why | type) == "string" and (.why | length) > 0)
       ' 2>/dev/null)"; then
+      # Phase 2: добавить content_hash и provenance ДО append.
+      local _title _insight _hash _gen_at
+      _title=$(printf '%s' "$normalized" | jq -r '.title')
+      _insight=$(printf '%s' "$normalized" | jq -r '.insight')
+      _hash=$(content_hash_insight "$_title" "$_insight")
+      _gen_at=$(date -u +%FT%TZ)
+      normalized=$(printf '%s' "$normalized" | jq -c \
+        --arg h "$_hash" \
+        --arg dream_id "dream:$UTC_DATE" \
+        --argjson iter "$iteration" \
+        --arg mode "$mode" \
+        --arg target "$domain_label" \
+        --arg model "${DREAM_GEMINI_MODEL:-flash}" \
+        --argjson sample_ids "$allowed_ids_json" \
+        --arg gen_at "$_gen_at" \
+        '. + {content_hash: $h, provenance: {
+           dream_id: $dream_id, iteration: $iter, mode: $mode, target: $target,
+           sample_node_ids: $sample_ids, prompt_version: "v2",
+           model: $model, generated_at: $gen_at
+        }}')
       append_candidate "$normalized"
       valid_count=$((valid_count + 1))
     fi
@@ -1002,6 +1067,55 @@ launch_iteration() {
   LAUNCHED=$((LAUNCHED + 1))
 
   log "stage=${RUN_ENGINE:-gemini} iterations_launched=$LAUNCHED runs=$RUNS active=${#PIDS[@]} mode=$mode lens=$lens_key target=\"$domain_label\""
+}
+
+# Дедупликация кандидатов против registry .insight-hashes.jsonl.
+# Дубликаты (hash уже в окне DREAM_DEDUP_WINDOW_DAYS) ВЫХОДЯТ из CANDIDATES_FILE,
+# а у их соответствующих registry-записей инкрементится hit_count + confidence.
+# Так синтез видит только новые инсайты, а повторяющиеся набирают силу в registry.
+dedup_against_registry() {
+  if [[ ! -s "$CANDIDATES_FILE" ]] || [[ ! -f "$INSIGHT_REGISTRY" ]]; then
+    log "stage=dedup event=skip reason=empty_registry_or_candidates"
+    return 0
+  fi
+  local tmp dup_count=0 kept_count=0 hash
+  tmp="$(mktemp "$DREAM_OUT_DIR/.candidates-deduped.XXXXXX")"
+  register_temp_file "$tmp"
+  while IFS= read -r cand; do
+    [[ -z "$cand" ]] && continue
+    hash=$(printf '%s' "$cand" | jq -r '.content_hash // ""')
+    if [[ -n "$hash" ]] && registry_has_hash "$hash"; then
+      registry_bump_hit "$hash"
+      dup_count=$((dup_count + 1))
+      log "stage=dedup event=duplicate_bumped hash=$hash"
+    else
+      printf '%s\n' "$cand" >> "$tmp"
+      kept_count=$((kept_count + 1))
+    fi
+  done < "$CANDIDATES_FILE"
+  mv "$tmp" "$CANDIDATES_FILE"
+  log "stage=dedup event=done kept=$kept_count duplicates=$dup_count"
+}
+
+# Записать ВСЕ свежие кандидаты (после dedup) в registry — каждая запись = новый
+# инсайт со счётом hits=1, confidence от LLM.
+register_new_candidates() {
+  if [[ ! -s "$CANDIDATES_FILE" ]]; then return 0; fi
+  local added=0 hash title lens domain confidence
+  while IFS= read -r cand; do
+    [[ -z "$cand" ]] && continue
+    hash=$(printf '%s' "$cand" | jq -r '.content_hash // ""')
+    [[ -z "$hash" ]] && continue
+    # Не записывать дубликаты — они уже в registry (после dedup они отфильтрованы).
+    if registry_has_hash "$hash"; then continue; fi
+    title=$(printf '%s' "$cand" | jq -r '.title // ""')
+    lens=$(printf '%s' "$cand" | jq -r '.lens // ""')
+    domain=$(printf '%s' "$cand" | jq -r '.domain // ""')
+    confidence=$(printf '%s' "$cand" | jq -r '.confidence // 0.7')
+    registry_append "$hash" "$title" "$lens" "$domain" "$confidence"
+    added=$((added + 1))
+  done < "$CANDIDATES_FILE"
+  log "stage=registry event=appended count=$added"
 }
 
 candidate_count() {
@@ -1585,6 +1699,9 @@ main() {
     log "stage=sonnet event=done launched=$SONNET_LAUNCHED reason=$STOP_REASON_SONNET session_share=$(sonnet_session_share_pct)% ref_api_cost=\$$(spent_usd_sonnet)"
   fi
 
+  STAGE="dedup"
+  dedup_against_registry
+
   count="$(candidate_count)"
   if ((count == 0)); then
     log "stage=synthesis event=no_candidates"
@@ -1606,6 +1723,16 @@ main() {
   stage_history="collect,generation,synthesis,output"
   write_markdown_output "$synthesis_text" "$count" "$stage_history"
   log "stage=output event=markdown_written path=$OUT_MD"
+
+  # Phase 2: записать новые candidates в insight registry — теперь будущие сны
+  # будут считать их повторами (с инкрементом confidence).
+  register_new_candidates
+
+  # Раз в неделю компактим registry (выбрасываем записи вне окна).
+  if (( $(date -u +%u) == 7 )); then
+    registry_compact
+    log "stage=registry event=compacted_weekly"
+  fi
 
   # Записать результат нодой в домен dreams (опц.).
   if [[ "$DREAM_WRITE_NODE" == "1" ]]; then
