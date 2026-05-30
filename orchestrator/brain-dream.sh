@@ -137,6 +137,11 @@ DREAM_TG_MODE="${DREAM_TG_MODE:-legacy}"
 # чисто uniform. Биологический аналог — hippocampal replay свежих эпизодов.
 DREAM_RECENT_WEIGHT_PCT="${DREAM_RECENT_WEIGHT_PCT:-70}"
 
+# Top-N кандидатов по confidence, передаваемых в synthesis-prompt Claude.
+# Снижает шум при больших объёмах кандидатов (per dream-introspector proposal #2).
+# Дефолт 120 = ~30K токенов промпта при средней длине инсайта.
+DREAM_SYNTH_TOP_N="${DREAM_SYNTH_TOP_N:-120}"
+
 LOG_FILE="$HOME/life/state/logs/brain-dream.log"
 GEMINI_SH="$ORCHESTRATOR_DIR/gemini.sh"
 UTC_DATE="$(date -u +%F)"
@@ -1184,6 +1189,21 @@ run_synthesis() {
   PROMPT_FILE="$(mktemp "$DREAM_OUT_DIR/.brain-dream-claude-prompt.XXXXXX")"
   register_temp_file "$PROMPT_FILE"
 
+  # Per introspector proposal #2: предотвратить «шум в синтезе» — взять только
+  # топ-N кандидатов по confidence. При меньшем объёме — все.
+  local _total _candidates_for_prompt
+  _total=$(wc -l < "$CANDIDATES_FILE" 2>/dev/null || echo 0)
+  if (( _total > DREAM_SYNTH_TOP_N )); then
+    _candidates_for_prompt="$DREAM_OUT_DIR/.candidates-top.jsonl"
+    register_temp_file "$_candidates_for_prompt"
+    jq -s -c --argjson n "$DREAM_SYNTH_TOP_N" \
+      'sort_by(-(.confidence // 0.7)) | .[:$n] | .[]' "$CANDIDATES_FILE" \
+      > "$_candidates_for_prompt"
+    log "stage=synthesis event=pruned_for_synth total=$_total kept=$DREAM_SYNTH_TOP_N"
+  else
+    _candidates_for_prompt="$CANDIDATES_FILE"
+  fi
+
   {
     cat <<'PROMPT'
 Ты синтезатор. Из этих кандидатов-инсайтов собери ТОП-10 по (важность × новизна × применимость), дедупни близкие.
@@ -1191,9 +1211,9 @@ run_synthesis() {
 В конце — Mermaid flowchart связей топ-10.
 Ответ — Markdown на русском.
 
-Кандидаты JSONL:
+Кандидаты JSONL (отсортированы по убыванию confidence, не более N топ):
 PROMPT
-    cat "$CANDIDATES_FILE"
+    cat "$_candidates_for_prompt"
   } > "$PROMPT_FILE"
 
   if synthesis_text="$(claude -p "$(cat "$PROMPT_FILE")" 2>/dev/null)"; then
