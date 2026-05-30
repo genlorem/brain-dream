@@ -1309,11 +1309,48 @@ write_markdown_output() {
 # изолирован — сон его не читает. Reindex движка тут НЕ делаем (нужен MCP);
 # нода появится в brain_search после ближайшего reindex. Если домен — git-репо,
 # коммитим (без push: remote у dreams не настроен).
+# Jaccard similarity на двух пробел-разделённых списках id.
+# Используется для решения «считать ли сегодняшний сон продолжением вчерашнего».
+_jaccard_score() {
+  local a="$1" b="$2"
+  if [[ -z "$a" || -z "$b" ]]; then
+    printf '0\n'; return 0
+  fi
+  awk -v a="$a" -v b="$b" '
+    BEGIN {
+      na = split(a, aa, " ")
+      nb = split(b, bb, " ")
+      for (i = 1; i <= na; i++) if (aa[i] != "") A[aa[i]] = 1
+      for (j = 1; j <= nb; j++) if (bb[j] != "") B[bb[j]] = 1
+      inter = 0; union = 0
+      for (k in A) { union++; if (k in B) inter++ }
+      for (k in B) if (!(k in A)) union++
+      if (union == 0) { print "0"; exit }
+      printf "%.3f", inter / union
+    }'
+}
+
+# Достать source_ids из frontmatter существующей dream-ноды (поле relates-to
+# через python-yaml или простой grep).
+_extract_relates_to_from_dream() {
+  local node_path="$1"
+  [[ -f "$node_path" ]] || return 0
+  # Простой парс: ищем блок relates-to в links, до следующего ключа верхнего уровня.
+  awk '
+    /^---/ { sep++; if (sep >= 2) exit; next }
+    sep == 1 && /^links:/ { in_links = 1; next }
+    in_links && /^[a-z]/ && !/^  / { in_links = 0; next }
+    in_links && /^  relates-to:/ { in_rt = 1; next }
+    in_links && in_rt && /^    - / { sub(/^    - /, ""); print; next }
+    in_links && /^  [a-z]/ && in_rt { in_rt = 0; next }
+  ' "$node_path" | tr "\n" " "
+}
+
 write_dream_node() {
   local synthesis_text="$1"
   local node_dir="$DREAM_NODE_ROOT/nodes"
   local node_file="$node_dir/dream-$UTC_DATE.md"
-  local title src_ids
+  local title
 
   if ! mkdir -p "$node_dir" 2>/dev/null; then
     log "stage=node event=mkdir_failed dir=$node_dir"
@@ -1322,10 +1359,39 @@ write_dream_node() {
 
   title="$(extract_top_titles "$OUT_MD" | sed -n '1p' | sed -E 's/^[0-9]+\.[[:space:]]*//')"
   [[ -z "$title" ]] && title="ночной синтез"
-  # Экранировать апостроф для YAML single-quoted строки (удвоением). Байтовую
-  # обрезку не делаем — она ломает многобайтные UTF-8 символы.
   title="${title//\'/\'\'}"
-  src_ids="$(jq -s -r '[.[].source_ids[]?] | unique | .[0:20] | join(", ")' "$CANDIDATES_FILE" 2>/dev/null || true)"
+
+  # === Active consolidation: рёбра relates-to и continues-in ===
+  # relates-to: уникальные source_ids из TOP-10 (по confidence DESC) кандидатов.
+  local relates_to_json relates_to_space
+  relates_to_json=$(jq -s -c \
+    'sort_by(-(.confidence // 0.7)) | .[:10] | [.[].source_ids[]?] | unique' \
+    "$CANDIDATES_FILE" 2>/dev/null || echo '[]')
+  relates_to_space=$(printf '%s' "$relates_to_json" | jq -r '.[]' 2>/dev/null | tr "\n" " ")
+
+  # continues-in: ищем последнюю dream-ноду до сегодняшней, считаем Jaccard
+  # source_ids. Порог DREAM_CONTINUES_JACCARD (default 0.3) — если выше, помечаем.
+  local prev_dream prev_relates jaccard continues_in_id=""
+  prev_dream=$(find "$node_dir" -maxdepth 1 -name 'dream-*.md' -type f \
+    ! -name "dream-$UTC_DATE.md" 2>/dev/null | sort | tail -1)
+  if [[ -n "$prev_dream" ]]; then
+    prev_relates=$(_extract_relates_to_from_dream "$prev_dream")
+    if [[ -n "$prev_relates" ]] && [[ -n "$relates_to_space" ]]; then
+      jaccard=$(_jaccard_score "$prev_relates" "$relates_to_space")
+      local threshold="${DREAM_CONTINUES_JACCARD:-0.3}"
+      if awk -v j="$jaccard" -v t="$threshold" 'BEGIN{exit !(j >= t)}'; then
+        # id формата dream:<date> из basename
+        continues_in_id=$(basename "$prev_dream" .md | sed 's/^dream-/dream:/')
+        log "stage=node event=continues_detected prev=$continues_in_id jaccard=$jaccard"
+      fi
+    fi
+  fi
+
+  # Top insight hashes — для отслеживания повторяемости конкретных инсайтов.
+  local top_hashes_json
+  top_hashes_json=$(jq -s -c \
+    'sort_by(-(.confidence // 0.7)) | .[:10] | [.[].content_hash // empty]' \
+    "$CANDIDATES_FILE" 2>/dev/null || echo '[]')
 
   {
     printf -- '---\n'
@@ -1345,13 +1411,26 @@ write_dream_node() {
     printf -- 'sonnet_session_share_pct: %s\n' "$(sonnet_session_share_pct)"
     printf -- 'sonnet_ref_api_cost_usd: %s  # справочная API-цена; через подписку не списывается\n' "$(spent_usd_sonnet)"
     printf -- 'candidate_count: %s\n' "$(candidate_count)"
-    printf -- 'links: []\n'
+    printf -- 'top_insight_hashes: %s\n' "$top_hashes_json"
+
+    # Структурированные рёбра вместо links: [].
+    printf -- 'links:\n'
+    printf -- '  relates-to:\n'
+    printf '%s' "$relates_to_json" | jq -r '.[]' 2>/dev/null | while IFS= read -r src_id; do
+      [[ -z "$src_id" ]] && continue
+      printf -- "    - '%s'\n" "${src_id//\'/\'\'}"
+    done
+    if [[ -n "$continues_in_id" ]]; then
+      printf -- '  continues-in:\n'
+      printf -- "    - '%s'   # jaccard=%s threshold=%s\n" \
+        "$continues_in_id" "$jaccard" "${DREAM_CONTINUES_JACCARD:-0.3}"
+    fi
+
     printf -- 'tags: [dream, synthesis]\n'
     printf -- '---\n\n'
     printf '%s\n\n' "$synthesis_text"
-    printf -- '---\nИсточники (source_ids топ-кандидатов): %s\n' "${src_ids:-—}"
   } > "$node_file"
-  log "stage=node event=written file=$node_file"
+  log "stage=node event=written file=$node_file relates_to_count=$(printf '%s' "$relates_to_json" | jq 'length')"
 
   if git -C "$DREAM_NODE_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git -C "$DREAM_NODE_ROOT" add "$node_file" >/dev/null 2>&1 || true
