@@ -29,6 +29,7 @@ export INVOKED_BY INPUT_DEPTH
 
 INPUT_NODE_FILE=$(printf '%s' "$INPUT" | jq -r '.input.node_file // ""' 2>/dev/null || printf '')
 INPUT_DATE=$(printf '%s' "$INPUT" | jq -r '.input.date // ""' 2>/dev/null || printf '')
+INPUT_MODE=$(printf '%s' "$INPUT" | jq -r '.input.mode // "publish"' 2>/dev/null || printf 'publish')
 
 START_TIME=$(date +%s)
 
@@ -87,6 +88,252 @@ notion_curl() {
   fi
   curl "${args[@]}"
 }
+
+# ── sync-scores mode: propagate permanent insight scores to Notion pages ────────
+run_sync_scores() {
+  local permanent_dir="$DREAM_NODE_ROOT/permanent"
+  local permanent_insights_scanned=0
+  local skipped_no_dream_id=0
+  local dreams_updated=0
+  local dreams_not_found=0
+  local details_s="[]"
+  local side_effects_s="[]"
+
+  # Step 1 — scan permanent insights
+  if [ ! -d "$permanent_dir" ]; then
+    log INFO "sync_scores permanent_dir_missing dir=$permanent_dir"
+    _emit_sync_scores_output 0 0 0 0 "[]" "[]"
+    return 0
+  fi
+
+  # Parse each insight file, collect into aggregation table via python
+  local agg_json
+  agg_json=$(python3 - "$permanent_dir" <<'PYEOF2'
+import sys, os, re, json
+from collections import defaultdict
+
+permanent_dir = sys.argv[1]
+files = sorted(f for f in os.listdir(permanent_dir) if f.startswith('insight-') and f.endswith('.md'))
+
+def parse_fm(content):
+    lines = content.split('\n')
+    fm_start = fm_end = None
+    for i, line in enumerate(lines):
+        if line.strip() == '---':
+            if fm_start is None:
+                fm_start = i
+            else:
+                fm_end = i
+                break
+    if fm_start is None or fm_end is None:
+        return {}
+    result = {}
+    for line in lines[fm_start+1:fm_end]:
+        if ':' not in line:
+            continue
+        key, _, rest = line.partition(':')
+        key = key.strip()
+        rest = rest.strip()
+        if not key or key.startswith('#'):
+            continue
+        # Strip quotes
+        if (rest.startswith("'") and rest.endswith("'")) or \
+           (rest.startswith('"') and rest.endswith('"')):
+            rest = rest[1:-1]
+        result[key] = rest
+    return result
+
+scanned = 0
+skipped = 0
+by_dream = defaultdict(list)
+
+for fname in files:
+    fpath = os.path.join(permanent_dir, fname)
+    try:
+        with open(fpath, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception:
+        continue
+    fm = parse_fm(content)
+    dream_id = fm.get('dream_id', '')
+    if not dream_id or dream_id in ('null', 'None', ''):
+        skipped += 1
+        scanned += 1
+        continue
+    scanned += 1
+    try:
+        score = float(fm.get('critic_score', '0') or '0')
+    except ValueError:
+        score = 0.0
+    rubric = fm.get('critic_rubric', '')
+    by_dream[dream_id].append({'score': score, 'rubric': rubric})
+
+groups = []
+for dream_id, items in sorted(by_dream.items()):
+    scores = [it['score'] for it in items]
+    rubrics = [it['rubric'] for it in items]
+    # most common rubric
+    from collections import Counter
+    rubric = Counter(rubrics).most_common(1)[0][0] if rubrics else ''
+    groups.append({
+        'dream_id': dream_id,
+        'count': len(items),
+        'max_score': round(max(scores), 6),
+        'avg_score': round(sum(scores)/len(scores), 6),
+        'rubric': rubric,
+    })
+
+print(json.dumps({'scanned': scanned, 'skipped': skipped, 'groups': groups}, ensure_ascii=False))
+PYEOF2
+)
+
+  permanent_insights_scanned=$(printf '%s' "$agg_json" | jq -r '.scanned // 0')
+  skipped_no_dream_id=$(printf '%s' "$agg_json" | jq -r '.skipped // 0')
+  local groups
+  groups=$(printf '%s' "$agg_json" | jq -c '.groups // []')
+  local group_count
+  group_count=$(printf '%s' "$groups" | jq 'length')
+
+  log INFO "sync_scores scanned=$permanent_insights_scanned skipped=$skipped_no_dream_id groups=$group_count"
+
+  # Steps 3–4: per dream — query Notion, patch page
+  local i=0
+  while [ "$i" -lt "$group_count" ]; do
+    local row
+    row=$(printf '%s' "$groups" | jq -c ".[$i]")
+    local dream_id count max_score avg_score rubric
+    dream_id=$(printf '%s' "$row" | jq -r '.dream_id')
+    count=$(printf '%s' "$row" | jq -r '.count')
+    max_score=$(printf '%s' "$row" | jq -r '.max_score')
+    avg_score=$(printf '%s' "$row" | jq -r '.avg_score')
+    rubric=$(printf '%s' "$row" | jq -r '.rubric')
+
+    log INFO "sync_scores querying_notion dream_id=$dream_id"
+
+    # Step 3: find Notion page via Источник "contains" dream_id
+    local query_body page_resp page_id
+    query_body=$(jq -n --arg did "$dream_id" \
+      '{"filter":{"property":"Источник","rich_text":{"contains":$did}}}')
+    page_resp=$(notion_curl POST "/databases/$NOTION_DB_ID/query" "$query_body" 2>&1) || {
+      log WARN "sync_scores notion_query_failed dream_id=$dream_id"
+      details_s=$(printf '%s' "$details_s" | jq -c \
+        --arg did "$dream_id" --argjson cnt "$count" \
+        --argjson ms "$max_score" --argjson as "$avg_score" --arg r "$rubric" \
+        '. + [{"dream_id":$did,"insights_count":$cnt,"max_score":$ms,"avg_score":$as,"rubric":$r,"notion_page_id":null,"action":"query_failed"}]')
+      i=$((i+1))
+      continue
+    }
+
+    local result_count
+    result_count=$(printf '%s' "$page_resp" | jq -r '.results | length' 2>/dev/null || printf '0')
+
+    if [ "$result_count" -eq 0 ]; then
+      log WARN "sync_scores notion_page_not_found dream_id=$dream_id"
+      dreams_not_found=$((dreams_not_found + 1))
+      details_s=$(printf '%s' "$details_s" | jq -c \
+        --arg did "$dream_id" --argjson cnt "$count" \
+        --argjson ms "$max_score" --argjson as "$avg_score" --arg r "$rubric" \
+        '. + [{"dream_id":$did,"insights_count":$cnt,"max_score":$ms,"avg_score":$as,"rubric":$r,"notion_page_id":null,"action":"page_not_found"}]')
+      i=$((i+1))
+      continue
+    fi
+
+    page_id=$(printf '%s' "$page_resp" | jq -r '.results[0].id')
+
+    # Step 4: PATCH page properties
+    local patch_body action
+    patch_body=$(jq -n \
+      --argjson cnt "$count" \
+      --argjson ms "$max_score" \
+      --arg r "$rubric" \
+      '{
+        "properties": {
+          "Статус": {"select": {"name": "промоучен"}},
+          "Подтверждено критиком": {"number": $cnt},
+          "Score критика": {"number": $ms},
+          "Рубрика": {"rich_text": [{"text": {"content": $r}}]}
+        }
+      }')
+
+    if [ "$DRY_RUN" = "true" ]; then
+      action="would_update"
+      log INFO "sync_scores dry_run action=would_update dream_id=$dream_id page_id=$page_id"
+    else
+      notion_curl PATCH "/pages/$page_id" "$patch_body" >/dev/null 2>&1 || {
+        log WARN "sync_scores patch_failed dream_id=$dream_id page_id=$page_id"
+        details_s=$(printf '%s' "$details_s" | jq -c \
+          --arg did "$dream_id" --argjson cnt "$count" \
+          --argjson ms "$max_score" --argjson as "$avg_score" --arg r "$rubric" --arg pid "$page_id" \
+          '. + [{"dream_id":$did,"insights_count":$cnt,"max_score":$ms,"avg_score":$as,"rubric":$r,"notion_page_id":$pid,"action":"patch_failed"}]')
+        i=$((i+1))
+        continue
+      }
+      action="updated"
+      dreams_updated=$((dreams_updated + 1))
+      log INFO "sync_scores updated dream_id=$dream_id page_id=$page_id"
+      side_effects_s=$(printf '%s' "$side_effects_s" | jq -c \
+        --arg pid "$page_id" --arg did "$dream_id" \
+        '. + [{"type":"notion_page_update","page_id":$pid,"dream_id":$did}]')
+    fi
+
+    details_s=$(printf '%s' "$details_s" | jq -c \
+      --arg did "$dream_id" --argjson cnt "$count" \
+      --argjson ms "$max_score" --argjson as "$avg_score" --arg r "$rubric" --arg pid "$page_id" --arg act "$action" \
+      '. + [{"dream_id":$did,"insights_count":$cnt,"max_score":$ms,"avg_score":$as,"rubric":$r,"notion_page_id":$pid,"action":$act}]')
+
+    i=$((i+1))
+  done
+
+  _emit_sync_scores_output \
+    "$permanent_insights_scanned" "$skipped_no_dream_id" \
+    "$dreams_updated" "$dreams_not_found" \
+    "$details_s" "$side_effects_s"
+}
+
+_emit_sync_scores_output() {
+  local scanned="$1" skipped="$2" updated="$3" not_found="$4"
+  local details_s="$5" side_effects_s="$6"
+  local duration=$(($(date +%s) - START_TIME))
+  jq -n \
+    --arg an "$AGENT_NAME" \
+    --argjson dur "$duration" \
+    --argjson sc "$scanned" \
+    --argjson sk "$skipped" \
+    --argjson up "$updated" \
+    --argjson nf "$not_found" \
+    --argjson det "$details_s" \
+    --argjson se "$side_effects_s" \
+    --argjson nc "$NOTION_CALLS" \
+    '{
+      version: "1",
+      agent_name: $an,
+      status: "ok",
+      duration_s: $dur,
+      result: {
+        mode: "sync-scores",
+        permanent_insights_scanned: $sc,
+        skipped_no_dream_id: $sk,
+        dreams_updated: $up,
+        dreams_not_found_in_notion: $nf,
+        details: $det
+      },
+      side_effects: $se,
+      telemetry: {llm_calls: [], notion_calls: $nc},
+      errors: []
+    }'
+}
+
+# ── Mode dispatch ──────────────────────────────────────────────────────────────
+case "${INPUT_MODE:-publish}" in
+  sync-scores)
+    log INFO "mode=sync-scores dry_run=$DRY_RUN"
+    run_sync_scores
+    exit 0
+    ;;
+  publish|*)
+    # fall through to existing publish logic below
+    ;;
+esac
 
 # ── Collect target files ──────────────────────────────────────────────────────
 declare -a TARGET_FILES=()

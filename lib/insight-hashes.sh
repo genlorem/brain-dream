@@ -56,9 +56,12 @@ registry_bump_hit() {
     else . end' "$INSIGHT_REGISTRY" > "$tmp" && mv "$tmp" "$INSIGHT_REGISTRY"
 }
 
-# Append a new entry. Args: hash, title, lens, domain, confidence.
+# Append a new entry. Args: hash, title, lens, domain, confidence, dream_id.
+# dream_id (e.g. "dream:2026-05-31") — связь обратно к ночному прогону,
+# где этот инсайт впервые появился. Используется dream-critic'ом для
+# провенанса в permanent/, и publisher'ом для sync-scores в Notion.
 registry_append() {
-  local h="$1" title="$2" lens="$3" domain="$4" confidence="${5:-0.7}"
+  local h="$1" title="$2" lens="$3" domain="$4" confidence="${5:-0.7}" dream_id="${6:-}"
   local now
   now=$(date -u +%s)
   mkdir -p "$(dirname "$INSIGHT_REGISTRY")"
@@ -67,10 +70,12 @@ registry_append() {
     --arg t "$title" \
     --arg l "$lens" \
     --arg d "$domain" \
+    --arg did "$dream_id" \
     --argjson now "$now" \
     --argjson c "$confidence" \
     '{hash:$h, first_seen_epoch:$now, last_seen_epoch:$now,
-      hit_count:1, confidence:$c, title:$t, lens:$l, domain:$d}' \
+      hit_count:1, confidence:$c, title:$t, lens:$l, domain:$d,
+      dream_id:(if $did=="" then null else $did end)}' \
     >> "$INSIGHT_REGISTRY"
 }
 

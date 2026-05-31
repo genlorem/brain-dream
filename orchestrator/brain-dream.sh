@@ -1179,7 +1179,9 @@ register_new_candidates() {
     lens=$(printf '%s' "$cand" | jq -r '.lens // ""')
     domain=$(printf '%s' "$cand" | jq -r '.domain // ""')
     confidence=$(printf '%s' "$cand" | jq -r '.confidence // 0.7')
-    registry_append "$hash" "$title" "$lens" "$domain" "$confidence"
+    local cand_dream_id
+    cand_dream_id=$(printf '%s' "$cand" | jq -r '.provenance.dream_id // ""')
+    registry_append "$hash" "$title" "$lens" "$domain" "$confidence" "$cand_dream_id"
     added=$((added + 1))
   done < "$CANDIDATES_FILE"
   log "stage=registry event=appended count=$added"
@@ -1844,7 +1846,11 @@ main() {
   # расхода и как продолжение, если Gemini рано упёрся в денежный лимит.
   if [[ "$DREAM_SONNET_COMPARE" == "1" ]] && ((cluster_count > 0)); then
     local sonnet_target=$GEMINI_LAUNCHED siter=0 now
-    if [[ -n "$DREAM_SONNET_MAX_RUNS" ]] && ((DREAM_SONNET_MAX_RUNS < sonnet_target)); then
+    if [[ -n "$DREAM_SONNET_MAX_RUNS" ]]; then
+      # Абсолютный override: и понижает, и поднимает. Полезно, когда Sonnet
+      # должен идти глубже Gemini (Gemini ограничен cost limit, Sonnet — нет,
+      # он расходует не доллары, а долю подписочной сессии — отдельный
+      # предохранитель DREAM_SONNET_SESSION_CAP_PCT).
       sonnet_target=$DREAM_SONNET_MAX_RUNS
     fi
     STAGE="sonnet"
