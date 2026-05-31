@@ -8,6 +8,7 @@ Plugin-style агенты brain-dream. Все следуют [plugin contract v1
 |---|---|---|---|---|
 | [`dream-introspector.sh`](dream-introspector.sh) | Анализирует свои сны и код, предлагает 1-3 улучшения | Sunday 04:00 UTC | $0.30/day | 1/12h |
 | [`dream-critic.sh`](dream-critic.sh) | Sonnet-валидатор инсайтов из registry; промотирует прошедших в `dreams/permanent/` | Sunday 12:00 UTC | $0.50/day | 1/12h |
+| [`dream-publisher-notion.sh`](dream-publisher-notion.sh) | Upsert dream-нод в Notion-базу под `brain` (idempotent по `Источник`); мутирует frontmatter с `notion_page_id`/`notion_url` и коммитит в git | Daily 18:30 UTC (after orchestrator) | $0 (no LLM) | 6/h |
 
 ## Общий контракт (cheat sheet)
 
