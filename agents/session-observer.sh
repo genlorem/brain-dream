@@ -25,6 +25,13 @@ GEMINI_SH="$REPO/orchestrator/gemini.sh"
 
 # Финализированная сессия: mtime старше N минут (чтобы не трогать активную).
 SESSION_IDLE_MIN="${SESSION_IDLE_MIN:-30}"
+# Не трогать древний бэклог: только сессии не старше N дней (дедуп-окно реестра = 14д).
+SESSION_MAX_AGE_DAYS="${SESSION_OBSERVER_MAX_AGE_DAYS:-30}"
+# Per-run предохранитель: не более N сессий с LLM-вызовом за прогон (cost-guard сейчас
+# no-op, т.к. gemini.sh не возвращает $). Остаток догоняется следующими прогонами.
+SESSION_MAX_PER_RUN="${SESSION_OBSERVER_MAX_PER_RUN:-25}"
+# Пропускать сессии короче N сообщений (тривиальные, без находок).
+SESSION_MIN_MSGS="${SESSION_OBSERVER_MIN_MSGS:-8}"
 
 # Guards: дешёвый агент, но cron каждые 6ч → rate-limit 5/6ч.
 GUARD_COST_DAILY_USD="${GUARD_COST_DAILY_USD:-0.20}"
@@ -103,16 +110,20 @@ if [ ! -d "$sessions_dir" ]; then
   exit 0
 fi
 
-# find sessions older than SESSION_IDLE_MIN minutes (по mtime)
-> "$sessions_file"
+# Финализированные (mtime >= SESSION_IDLE_MIN) и не старше SESSION_MAX_AGE_DAYS.
+# Сортировка newest-first, чтобы per-run лимит брал самые свежие/релевантные.
+max_age_min=$(( SESSION_MAX_AGE_DAYS * 1440 ))
+tmp_scan=$(mktemp /tmp/so-scan.XXXXXX)
 while IFS= read -r -d '' f; do
   mtime_epoch=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
   now_epoch=$(date +%s)
   age_min=$(( (now_epoch - mtime_epoch) / 60 ))
-  if (( age_min >= SESSION_IDLE_MIN )); then
-    printf '%s\n' "$f" >> "$sessions_file"
+  if (( age_min >= SESSION_IDLE_MIN && age_min <= max_age_min )); then
+    printf '%s\t%s\n' "$mtime_epoch" "$f" >> "$tmp_scan"
   fi
 done < <(find "$sessions_dir" -maxdepth 3 -name "*.jsonl" -type f -print0 2>/dev/null)
+sort -rn "$tmp_scan" 2>/dev/null | cut -f2- > "$sessions_file"
+rm -f "$tmp_scan"
 
 total_sessions=$(wc -l < "$sessions_file" | tr -d ' ')
 log INFO "sessions_found=$total_sessions idle_min=$SESSION_IDLE_MIN"
@@ -302,6 +313,12 @@ while IFS= read -r session_path; do
   [ -z "$session_path" ] && continue
   [ -f "$session_path" ] || continue
 
+  # Per-run предохранитель: остановиться после SESSION_MAX_PER_RUN обработанных сессий.
+  if (( sessions_processed >= SESSION_MAX_PER_RUN )); then
+    log INFO "max_per_run_reached limit=$SESSION_MAX_PER_RUN — остаток в следующий прогон"
+    break
+  fi
+
   # Derive session_id from path
   session_id=$(basename "$(dirname "$session_path")")/$(basename "$session_path" .jsonl)
   session_id="${session_id//\//-}"
@@ -324,6 +341,14 @@ while IFS= read -r session_path; do
 
   if (( total_msgs <= start_idx )); then
     log INFO "session_up_to_date session_id=$session_id"
+    sessions_skipped=$((sessions_skipped + 1))
+    continue
+  fi
+
+  # Пропустить мелкие/тривиальные сессии (бэклог огромен, ~237 сессий/день;
+  # короткие не несут находок и не должны жечь LLM-бюджет).
+  if (( total_msgs - start_idx < SESSION_MIN_MSGS )); then
+    log INFO "session_too_small session_id=$session_id new=$((total_msgs - start_idx)) min=$SESSION_MIN_MSGS"
     sessions_skipped=$((sessions_skipped + 1))
     continue
   fi
@@ -452,8 +477,11 @@ while IFS= read -r session_path; do
     observed_at=$(date -u +%FT%TZ)
     node_date=$(date -u +%F)
     node_slug=$(printf '%s' "$c_title" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//' | cut -c1-40)
-    node_filename="${node_date}_${session_id:0:12}_${node_slug}_${c_hash:0:8}.md"
-    node_dir="$DREAM_NODE_ROOT/session-findings"
+    # Писать в nodes/ — единственный tracked путь (.gitignore dreams = allowlist
+    # на nodes/**) и место, которое читают brain-dream.sh и Brain-индекс.
+    # Префикс finding- отличает от dream-*.md.
+    node_filename="finding-${node_date}_${session_id:0:12}_${node_slug}_${c_hash:0:8}.md"
+    node_dir="$DREAM_NODE_ROOT/nodes"
     node_file="$node_dir/$node_filename"
 
     mkdir -p "$node_dir"
