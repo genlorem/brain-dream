@@ -452,7 +452,7 @@ while IFS= read -r session_path; do
     observed_at=$(date -u +%FT%TZ)
     node_date=$(date -u +%F)
     node_slug=$(printf '%s' "$c_title" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//' | cut -c1-40)
-    node_filename="${node_date}_${session_id:0:12}_${node_slug}.md"
+    node_filename="${node_date}_${session_id:0:12}_${node_slug}_${c_hash:0:8}.md"
     node_dir="$DREAM_NODE_ROOT/session-findings"
     node_file="$node_dir/$node_filename"
 
