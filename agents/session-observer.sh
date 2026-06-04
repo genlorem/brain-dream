@@ -429,6 +429,27 @@ while IFS= read -r session_path; do
   cand_count=$(wc -l < "$candidates_file" | tr -d ' ')
   log INFO "candidates_parsed session_id=$session_id count=$cand_count"
 
+  # Семантический дедуп (batch, одна загрузка модели на сессию): спросить helper,
+  # какие кандидаты — near-dup существующих finding-узлов (exact-hash их не ловит).
+  declare -A SEM_DUP=()
+  SEM_DEDUP="$REPO/tools/finding-dedup.py"
+  SEM_PY="${BRAIN_VENV_PY:-/home/gen/brain/engine/.venv/bin/python}"
+  if [ -x "$SEM_PY" ] && [ -f "$SEM_DEDUP" ]; then
+    sem_in=$(mktemp /tmp/so-sem.XXXXXX)
+    while IFS= read -r candidate; do
+      [ -z "$candidate" ] && continue
+      st=$(printf '%s' "$candidate" | jq -r '.title // ""')
+      sb=$(printf '%s' "$candidate" | jq -r '.body // ""')
+      [ -z "$st" ] && continue
+      st=$(scrub_secrets "$st"); sb=$(scrub_secrets "$sb")
+      printf '%s\t%s. %s\n' "$(content_hash_insight "$st" "$sb")" "$st" "$sb" >> "$sem_in"
+    done < "$candidates_file"
+    while IFS=$'\t' read -r sh verdict _mid _score; do
+      [ "$verdict" = "DUP" ] && SEM_DUP["$sh"]=1
+    done < <("$SEM_PY" "$SEM_DEDUP" check "$DREAM_NODE_ROOT/nodes" < "$sem_in" 2>/dev/null)
+    rm -f "$sem_in"
+  fi
+
   session_nodes_written=0
 
   # Process each candidate
@@ -463,6 +484,13 @@ while IFS= read -r session_path; do
     if registry_has_hash "$c_hash"; then
       log INFO "dedup_hit hash=$c_hash title=$(printf '%s' "$c_title" | head -c 60)"
       registry_bump_hit "$c_hash"
+      continue
+    fi
+
+    # Семантический дедуп: near-dup уже существующего finding-узла → пропустить.
+    if [ -n "${SEM_DUP[$c_hash]:-}" ]; then
+      log INFO "semantic_dedup_skip hash=$c_hash title=$(printf '%s' "$c_title" | head -c 60)"
+      registry_bump_hit "$c_hash" 2>/dev/null || true
       continue
     fi
 
