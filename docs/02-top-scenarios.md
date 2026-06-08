@@ -52,7 +52,7 @@
 30. **Self-replicating ARCHITECTURE.md** — раз в месяц сон смотрит `dreams/permanent/`, генерирует новую версию `ARCHITECTURE.md` как PR.
 
 ### G. Per-project knowledge (если идём в эту сторону)
-31. **vipzal-context-pack** — cross-проходы по personal-задачам подтягивают свежий контекст VIP-тикетов из Tracker (через `yt.sh`).
+31. **vipzal-context-pack** — cross-проходы по personal-задачам подтягивают свежий контекст VIP-тикетов из Tracker (через `yandex-tracker.sh`).
 32. **marquiz-financial-context** — финансовые сводки Marquiz из Finolog подгружаются как контекст для cross.
 
 ---
