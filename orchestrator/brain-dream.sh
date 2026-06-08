@@ -133,6 +133,15 @@ DREAM_SONNET_SESSION_LIMIT_CALLS="${DREAM_SONNET_SESSION_LIMIT_CALLS:-200}"
 # 30% при лимите 200 = 60 вызовов за ночь, дневной остаток подписки сохранён.
 DREAM_SONNET_SESSION_CAP_PCT="${DREAM_SONNET_SESSION_CAP_PCT:-30}"
 
+# Фолбэк на Sonnet, если Gemini недоступен (упёрся в monthly spend cap, протух
+# ключ и т.п.). 1 = пре-флайт проба в начале прогона; при провале праймари-фаза
+# Gemini пропускается и весь синтез идёт на Sonnet через подписку Claude Code.
+# Реальный потолок проходов всё равно режется DREAM_SONNET_SESSION_CAP_PCT.
+DREAM_SONNET_FALLBACK="${DREAM_SONNET_FALLBACK:-1}"
+# Сколько проходов делает Sonnet в режиме фолбэка (когда Gemini дал 0 проходов и
+# DREAM_SONNET_MAX_RUNS не задан). Сессионный cap-pct всё равно может оборвать раньше.
+DREAM_SONNET_FALLBACK_RUNS="${DREAM_SONNET_FALLBACK_RUNS:-60}"
+
 # Запись результата сна нодой в домен dreams (~/brain/dreams/nodes). 1 = писать.
 # Домен dreams изолирован: сон его не читает (см. domain_root).
 DREAM_WRITE_NODE="${DREAM_WRITE_NODE:-0}"
@@ -189,6 +198,7 @@ DEADLINE_CUT=0
 STOP_REASON="not_started"
 STAGE="start"
 RUN_ENGINE="gemini"
+GEMINI_UNAVAILABLE=0
 GEMINI_LAUNCHED=0
 GEMINI_RUNS=0
 SONNET_LAUNCHED=0
@@ -1700,6 +1710,21 @@ load_gemini_key() {
   return 0
 }
 
+# Пре-флайт проба Gemini тем же путём, что и генерация (gemini.sh + та же модель),
+# чтобы поймать недоступность ДО запуска 500 заведомо провальных проходов.
+# gemini.sh при 429/cap печатает текст ошибки и отдаёт exit 0 (тихий фейл),
+# поэтому помимо кода выхода проверяем тело ответа на сигнатуры ошибок API.
+# Возврат: 0 = Gemini отвечает, 1 = недоступен (cap / ключ / сеть).
+gemini_available() {
+  local out
+  out="$(printf 'ping\n' | timeout 30 "$GEMINI_SH" -m "${DREAM_GEMINI_MODEL:-flash}" stdin "Ответь одним словом: ok" 2>/dev/null)" || return 1
+  [[ -z "${out//[[:space:]]/}" ]] && return 1
+  if printf '%s' "$out" | grep -qiE 'spending cap|RESOURCE_EXHAUSTED|exceeded|quota|expired|INVALID|PERMISSION_DENIED|UNAUTHENTICATED|"error"'; then
+    return 1
+  fi
+  return 0
+}
+
 top_three_theme() {
   local titles
 
@@ -1805,11 +1830,20 @@ main() {
   STAGE="generation"
   if ((cluster_count > 0)); then
     log "stage=generation event=start"
+    # Пре-флайт проба Gemini. Если он недоступен (spend cap / протухший ключ) и
+    # включён фолбэк — праймари-цикл Gemini пропускается (gate ниже), весь синтез
+    # уходит на Sonnet через подписку Claude Code (фаза 2 принудительно ниже).
+    if [[ "$DREAM_SONNET_FALLBACK" == "1" ]] && ! gemini_available; then
+      GEMINI_UNAVAILABLE=1
+      RUN_ENGINE="sonnet"
+      STOP_REASON="gemini_unavailable"
+      log "stage=generation event=gemini_unavailable fallback=sonnet"
+    fi
     # Cap страхует от бесконечного цикла, если sample_paths постоянно даёт
     # пустоту (skip_empty_sample не инкрементирует LAUNCHED, значит max_runs
     # сам по себе не остановит). По аналогии с sonnet-циклом ниже.
     local iteration_cap=$((DREAM_MAX_RUNS * 3 + 10))
-    while deadline_generation_open && ((ITERATION < iteration_cap)); do
+    while [[ "$RUN_ENGINE" == "gemini" ]] && deadline_generation_open && ((ITERATION < iteration_cap)); do
       while ((${#PIDS[@]} >= DREAM_CONCURRENCY)); do
         wait_for_one_job
       done
@@ -1824,7 +1858,7 @@ main() {
       # пауза между запусками держит нас заметно ниже лимита.
       sleep "${DREAM_SLEEP:-0}"
     done
-    if ((ITERATION >= iteration_cap)) && [[ "$STOP_REASON" == "running" ]]; then
+    if [[ "$RUN_ENGINE" == "gemini" ]] && ((ITERATION >= iteration_cap)) && [[ "$STOP_REASON" == "running" ]]; then
       STOP_REASON="iteration_cap"
       log "stage=generation event=iteration_cap_hit iterations=$ITERATION launched=$LAUNCHED cap=$iteration_cap"
     fi
@@ -1844,7 +1878,7 @@ main() {
 
   # ФАЗА 2 (опц.): Sonnet прогоняет те же проходы, что Gemini — для сравнения
   # расхода и как продолжение, если Gemini рано упёрся в денежный лимит.
-  if [[ "$DREAM_SONNET_COMPARE" == "1" ]] && ((cluster_count > 0)); then
+  if { [[ "$DREAM_SONNET_COMPARE" == "1" ]] || ((GEMINI_UNAVAILABLE == 1)); } && ((cluster_count > 0)); then
     local sonnet_target=$GEMINI_LAUNCHED siter=0 now
     if [[ -n "$DREAM_SONNET_MAX_RUNS" ]]; then
       # Абсолютный override: и понижает, и поднимает. Полезно, когда Sonnet
@@ -1852,6 +1886,9 @@ main() {
       # он расходует не доллары, а долю подписочной сессии — отдельный
       # предохранитель DREAM_SONNET_SESSION_CAP_PCT).
       sonnet_target=$DREAM_SONNET_MAX_RUNS
+    elif ((GEMINI_UNAVAILABLE == 1)); then
+      # Фолбэк: Gemini дал 0 проходов, поэтому таргет = свой дефолт, а не 0.
+      sonnet_target=$DREAM_SONNET_FALLBACK_RUNS
     fi
     STAGE="sonnet"
     RUN_ENGINE="sonnet"
