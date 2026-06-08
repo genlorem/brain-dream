@@ -1922,7 +1922,18 @@ main() {
 
   count="$(candidate_count)"
   if ((count == 0)); then
-    log "stage=synthesis event=no_candidates"
+    # Отличаем "движок упал" (все вызовы зафейлились — Gemini cap И/ИЛИ Sonnet
+    # недоступен) от честной "свежих инсайтов нет" ночи. RUNS = суммарно успешных
+    # проходов (gemini+sonnet), FAILS = суммарно зафейленных. RUNS==0 при FAILS>0
+    # значит ни один движок не ответил → это поломка, а не пустой сон.
+    if ((RUNS == 0 && FAILS > 0)); then
+      log "stage=synthesis event=no_candidates cause=engine_failure failed=$FAILS gemini_launched=$GEMINI_LAUNCHED sonnet_launched=$SONNET_LAUNCHED"
+      stage_history="collect,generation,engine-failure"
+      write_markdown_output "Сон не дал кандидатов: движок генерации недоступен — все $FAILS вызовов зафейлились. Проверь Gemini spend cap (ai.studio/spend) и доступность Sonnet-подписки." "$count" "$stage_history"
+      send_telegram_message "⚠️ brain-dream: движок генерации НЕДОСТУПЕН — все $FAILS вызовов зафейлились, сон пуст. Вероятно Gemini уперся в spend cap, а Sonnet-фолбэк тоже не ответил."$'\n'"Файл: $OUT_MD"
+      exit 3
+    fi
+    log "stage=synthesis event=no_candidates cause=no_new_insights"
     stage_history="collect,generation,no-candidates-output"
     write_markdown_output "Сон не дал кандидатов." "$count" "$stage_history"
     send_telegram_message "сон не дал кандидатов"$'\n'"Файл: $OUT_MD"
