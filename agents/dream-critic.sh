@@ -97,7 +97,13 @@ export INVOKED_BY INPUT_DEPTH
 TOP_N="${DREAM_CRITIC_TOP_N:-20}"
 WINDOW_DAYS="${DREAM_CRITIC_WINDOW_DAYS:-7}"
 PROMOTE_THRESHOLD_CONFIDENCE="${DREAM_CRITIC_MIN_CONFIDENCE:-0.7}"
-PROMOTE_MIN_HITS="${DREAM_CRITIC_MIN_HITS:-2}"
+# hit_count — повторяемость инсайта между ночами. БЫЛ дефолт 2, но реестр
+# дедуплицируется по ТОЧНОМУ content_hash, а LLM каждую ночь формулирует инсайт
+# иначе → точных повторов не бывает: все 1943 записи имели hit_count=1, поэтому
+# critic не промоутил НИКОГДА (permanent/ пуст). Дефолт →1: реальный фильтр
+# качества — confidence + feedback + LLM-рубрика (pass_threshold), а не повтор.
+# Глубокий фикс (семантический повтор, как finding-dedup.py) — отдельно.
+PROMOTE_MIN_HITS="${DREAM_CRITIC_MIN_HITS:-1}"
 
 START_TIME=$(date +%s)
 log() {
