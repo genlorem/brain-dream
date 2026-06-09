@@ -22,9 +22,11 @@ REPO="${BRAIN_DREAM_REPO:-$(cd "$AGENT_DIR/.." && pwd)}"
 DREAM_DIR="${DREAM_NODE_ROOT:-$HOME/brain/dreams}/nodes"
 
 # 5-layer guards. Тюнинг для introspector:
-#   - кост дневной $0.30 (Sonnet с большим контекстом — недёшево)
+#   - кост дневной $1.00 (Sonnet через claude CLI тащит ~32K системного контекста
+#     на вызов → справочная reference-цена одного аналитического прохода ~$0.22–0.5;
+#     прежний $0.30 почти тут же тришил daily-CB и блокировал любой ретрай в тот же день)
 #   - rate-limit 1 вызов / 12ч (он еженедельный, не должен запускаться чаще)
-GUARD_COST_DAILY_USD="${GUARD_COST_DAILY_USD:-0.30}"
+GUARD_COST_DAILY_USD="${GUARD_COST_DAILY_USD:-1.00}"
 GUARD_RATE_LIMIT_CALLS="${GUARD_RATE_LIMIT_CALLS:-1}"
 GUARD_RATE_LIMIT_WINDOW_MIN="${GUARD_RATE_LIMIT_WINDOW_MIN:-720}"
 # shellcheck disable=SC1091
@@ -37,7 +39,12 @@ if [ ! -t 0 ]; then
 fi
 
 DRY_RUN=$(printf '%s' "$INPUT" | jq -r '.config.dry_run // false' 2>/dev/null || printf 'false')
-BUDGET_USD=$(printf '%s' "$INPUT" | jq -r '.config.model_budget_usd // 0.20' 2>/dev/null || printf '0.20')
+BUDGET_USD=$(printf '%s' "$INPUT" | jq -r '.config.model_budget_usd // 1.5' 2>/dev/null || printf '1.5')
+# Защита: пустой stdin (cron зовёт `< /dev/null`) даёт пустой/нечисловой BUDGET_USD,
+# тогда `claude --max-budget-usd "" --output-format json` съедает следующий флаг как
+# значение и падает мгновенно. Плюс reference-цена одного прохода ~$0.22+ не влезает
+# в прежний дефолт $0.20. Любое невалидное значение → безопасный дефолт.
+[[ "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || BUDGET_USD=1.5
 INVOKED_BY=$(printf '%s' "$INPUT" | jq -r '.invoked_by // "manual"' 2>/dev/null || printf 'manual')
 INPUT_DEPTH=$(printf '%s' "$INPUT" | jq -r '.input.depth // 0' 2>/dev/null || printf '0')
 export INVOKED_BY INPUT_DEPTH
