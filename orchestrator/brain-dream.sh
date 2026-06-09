@@ -152,6 +152,12 @@ DREAM_NODE_ROOT="${DREAM_NODE_ROOT:-$HOME/brain/dreams}"
 # обложка + media-group инсайтов).
 DREAM_TG_MODE="${DREAM_TG_MODE:-legacy}"
 
+# Интерактивная оценка инсайтов кнопками в Telegram. >0 = после дайджеста (режим
+# single) шлём отдельное сообщение с топ-N кандидатов и сеткой кнопок 👍/🤷/👎.
+# Нажатие обрабатывает digest-bot (handlers/dream.py) → dream-feedback.sh.
+# 0 = выключить кнопки.
+DREAM_FEEDBACK_BUTTONS="${DREAM_FEEDBACK_BUTTONS:-10}"
+
 # Recency-bias при сэмплинге нод в каждом проходе: % выборки из «свежей»
 # половины (по mtime). 70% = свежие имеют приоритет, но не монополию. 50% =
 # чисто uniform. Биологический аналог — hippocampal replay свежих эпизодов.
@@ -1615,6 +1621,61 @@ send_telegram_message() {
   fi
 }
 
+# Текстовое сообщение с инлайн-клавиатурой (reply_markup — компактный JSON).
+send_telegram_message_markup() {
+  local text="$1" markup="$2"
+
+  if ! load_telegram_pair; then
+    return 0
+  fi
+
+  if curl -fs -o /dev/null -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+    -d "chat_id=${TG_CHAT}" \
+    -d "disable_web_page_preview=true" \
+    --data-urlencode "text=${text}" \
+    --data-urlencode "reply_markup=${markup}"; then
+    log "stage=telegram event=feedback_buttons_ok"
+  else
+    log "stage=telegram event=feedback_buttons_failed"
+  fi
+}
+
+# Интерактивная оценка: одно сообщение с нумерованным списком топ-N кандидатов
+# по confidence и сеткой кнопок (строка на инсайт: 👍/🤷/👎). callback_data =
+# df:<content_hash>:<u|k|n>:<idx>. Нажатие ловит digest-bot → dream-feedback.sh.
+send_feedback_buttons() {
+  local n="${DREAM_FEEDBACK_BUTTONS:-10}" payload lines markup top_count
+
+  (( n > 0 )) || return 0
+  [[ -s "$CANDIDATES_FILE" ]] || return 0
+
+  payload="$(jq -s --argjson n "$n" '
+    ( map(select((.content_hash // "") != "" and (.title // "") != ""))
+      | group_by(.content_hash) | map(max_by(.confidence))
+      | sort_by(-.confidence) | .[:$n] ) as $top
+    | { count: ($top | length),
+        lines: ($top | to_entries
+                 | map("\(.key+1). \(.value.title | gsub("\n";" ") | .[0:72])")
+                 | join("\n")),
+        kb: { inline_keyboard: ($top | to_entries | map(
+                (.key+1) as $i | (.value.content_hash) as $h |
+                [ {text:"\($i) 👍", callback_data:"df:\($h):u:\($i)"},
+                  {text:"\($i) 🤷", callback_data:"df:\($h):k:\($i)"},
+                  {text:"\($i) 👎", callback_data:"df:\($h):n:\($i)"} ])) } }
+  ' "$CANDIDATES_FILE" 2>/dev/null)"
+
+  [[ -z "$payload" ]] && return 0
+  top_count="$(jq -r '.count // 0' <<<"$payload" 2>/dev/null || echo 0)"
+  (( top_count > 0 )) || return 0
+
+  lines="$(jq -r '.lines' <<<"$payload")"
+  markup="$(jq -c '.kb' <<<"$payload")"
+
+  send_telegram_message_markup \
+    "🌙 Сон мозга ${UTC_DATE} — оцени инсайты"$'\n\n'"${lines}"$'\n\n'"👍 полезно · 🤷 знал · 👎 мимо" \
+    "$markup"
+}
+
 send_telegram_photo() {
   local photo_path="$1"
   local caption="$2"
@@ -1979,6 +2040,7 @@ main() {
     else
       send_telegram_message "$caption"
     fi
+    send_feedback_buttons
   else
     summary_text="$(telegram_summary_text)"
     send_telegram_message "$summary_text"
