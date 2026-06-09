@@ -85,6 +85,9 @@ fi
 # ── Input parsing ─────────────────────────────────────────────────────────────
 INPUT="{}"
 if [ ! -t 0 ]; then INPUT=$(cat); fi
+# Пустой stdin (cron зовёт `< /dev/null`) → пустая строка ломает jq-парсинг
+# (jq на пустом входе молча отдаёт пусто, `// default` не срабатывает). → "{}".
+[ -z "${INPUT//[[:space:]]/}" ] && INPUT="{}"
 
 DRY_RUN=$(printf '%s' "$INPUT" | jq -r '.config.dry_run // false' 2>/dev/null || printf 'false')
 INVOKED_BY=$(printf '%s' "$INPUT" | jq -r '.invoked_by // "manual"' 2>/dev/null || printf 'manual')

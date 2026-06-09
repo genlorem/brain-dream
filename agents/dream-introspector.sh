@@ -37,6 +37,10 @@ INPUT="{}"
 if [ ! -t 0 ]; then
   INPUT=$(cat)
 fi
+# Пустой stdin (cron зовёт `< /dev/null`) → пустая строка ломает jq-парсинг:
+# jq на пустом входе молча отдаёт пусто, `// default` НЕ срабатывает, и
+# DRY_RUN/INVOKED_BY/INPUT_DEPTH остаются пустыми. Нормализуем в валидный JSON.
+[ -z "${INPUT//[[:space:]]/}" ] && INPUT="{}"
 
 DRY_RUN=$(printf '%s' "$INPUT" | jq -r '.config.dry_run // false' 2>/dev/null || printf 'false')
 BUDGET_USD=$(printf '%s' "$INPUT" | jq -r '.config.model_budget_usd // 1.5' 2>/dev/null || printf '1.5')
