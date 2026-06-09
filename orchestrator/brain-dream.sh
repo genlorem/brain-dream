@@ -158,6 +158,14 @@ DREAM_TG_MODE="${DREAM_TG_MODE:-legacy}"
 # 0 = выключить кнопки.
 DREAM_FEEDBACK_BUTTONS="${DREAM_FEEDBACK_BUTTONS:-10}"
 
+# Петля фидбэка: взвешивать линзы/домены по оценкам из .feedback.jsonl.
+# 1 = генерация чаще берёт линзы/домены с высоким useful_rate и реже — с высоким
+# noise_rate (через GCD-нормализованную взвешенную ротацию: без оценок все веса
+# равны → схлопывается в исходный round-robin, нулевое изменение поведения).
+# 0 = выкл (чистый round-robin). Critic читает оценки независимо от этого флага.
+DREAM_FEEDBACK_BIAS="${DREAM_FEEDBACK_BIAS:-1}"
+DREAM_FEEDBACK_FILE="${DREAM_FEEDBACK:-$HOME/brain/dreams/.feedback.jsonl}"
+
 # Recency-bias при сэмплинге нод в каждом проходе: % выборки из «свежей»
 # половины (по mtime). 70% = свежие имеют приоритет, но не монополию. 50% =
 # чисто uniform. Биологический аналог — hippocampal replay свежих эпизодов.
@@ -209,6 +217,13 @@ GEMINI_LAUNCHED=0
 GEMINI_RUNS=0
 SONNET_LAUNCHED=0
 STOP_REASON_SONNET="none"
+
+# Взвешенные (по фидбэку) последовательности индексов линз/кластеров. Пусто =
+# fallback на чистый round-robin (iteration % len). Заполняются в main().
+WEIGHTED_NREM_IDX=()
+WEIGHTED_REM_IDX=()
+WEIGHTED_LENS_IDX=()
+WEIGHTED_CLUSTER_IDX=()
 
 mkdir -p "$(dirname "$LOG_FILE")" "$DREAM_OUT_DIR"
 
@@ -912,6 +927,53 @@ REM_LENS_PROMPTS=(
   "Найди неочевидное важное открытие: то, что трудно заметить при обычном чтении."
 )
 
+# ── Feedback-bias: веса линз/доменов из .feedback.jsonl ──────────────────────
+# Emit "key<TAB>weight" (1|2|3) для измерения dim ∈ {lens,domain}: джойн
+# feedback.hash → registry(.lens/.domain), neutral=2, useful≥0.5→3, noise≥0.5→1
+# (только при n≥3 оценок ключа). Ключи без фидбэка не выводятся (consumer → 2).
+fb_weight_lines() {
+  local dim="$1"
+  [[ "${DREAM_FEEDBACK_BIAS:-1}" == "1" ]] || return 0
+  [[ -f "$DREAM_FEEDBACK_FILE" && -f "${INSIGHT_REGISTRY:-}" ]] || return 0
+  jq -rn --slurpfile reg "$INSIGHT_REGISTRY" --slurpfile fb "$DREAM_FEEDBACK_FILE" --arg dim "$dim" '
+    ($fb | sort_by(.epoch) | reduce .[] as $x ({}; .[$x.hash] = $x.verdict)) as $fv
+    | (reduce $reg[] as $r ({};
+         ($fv[$r.hash]) as $v
+         | if $v == null then .
+           else ($r[$dim] // "?") as $k
+                | .[$k] = ((.[$k] // {useful:0,known:0,noise:0}) | .[$v] += 1)
+           end)) as $agg
+    | $agg | to_entries[]
+    | .value as $c | (($c.useful//0)+($c.known//0)+($c.noise//0)) as $n
+    | "\(.key)\t\(if $n < 3 then 2 elif (($c.noise//0)/$n) >= 0.5 then 1 elif (($c.useful//0)/$n) >= 0.5 then 3 else 2 end)"
+  ' 2>/dev/null
+}
+
+_gcd() { local a="$1" b="$2" t; while ((b)); do t=$((a % b)); a=$b; b=$t; done; printf '%s' "$a"; }
+
+# Печатает индексы 0..count-1, каждый повторён (weight/gcd) раз, по порядку.
+# $1=count, $2=файл "key<TAB>weight", далее keys[i] (ключ для индекса i).
+# При равных весах gcd-нормализация даёт 1× каждый → исходный порядок [0..count-1].
+build_weighted_idx() {
+  local count="$1" wfile="$2"; shift 2
+  local -a keys=("$@") w=()
+  local i k wt g=0 out="" rep j
+  for ((i = 0; i < count; i++)); do
+    k="${keys[$i]:-?}"
+    wt="$(awk -F'\t' -v k="$k" '$1==k{print $2; f=1} END{if(!f)print 2}' "$wfile" 2>/dev/null)"
+    [[ "$wt" =~ ^[0-9]+$ ]] || wt=2
+    ((wt < 1)) && wt=1
+    w[$i]=$wt
+    if ((g == 0)); then g=$wt; else g="$(_gcd "$g" "$wt")"; fi
+  done
+  ((g < 1)) && g=1
+  for ((i = 0; i < count; i++)); do
+    rep=$(( w[i] / g )); ((rep < 1)) && rep=1
+    for ((j = 0; j < rep; j++)); do out+="$i "; done
+  done
+  printf '%s' "$out"
+}
+
 pick_second_cluster_index() {
   local first_index="$1"
   local cluster_count="$2"
@@ -1078,7 +1140,7 @@ launch_iteration() {
   local lens_index lens_key lens_text desired mode domain_label context allowed_ids_json
   local first_index second_index line first_domain first_cluster second_domain second_cluster
   local phase cross_modulo
-  local -a selected selected_a selected_b lens_arr prompt_arr
+  local -a selected selected_a selected_b lens_arr prompt_arr _widx
 
   # Phase selection: NREM первые DREAM_NREM_PASSES итераций (Gemini phase),
   # REM остальные. Для Sonnet phase (siter 0..N) ровно те же inputs.
@@ -1104,7 +1166,20 @@ launch_iteration() {
     export DREAM_RECENT_WEIGHT_PCT="${_DREAM_RECENT_WEIGHT_PCT_BASE:-70}"
   fi
 
-  lens_index=$((iteration % ${#lens_arr[@]}))
+  # Взвешенная по фидбэку ротация линз (пусто → исходный round-robin).
+  _widx=()
+  if [[ "$phase" == "nrem" ]]; then
+    _widx=("${WEIGHTED_NREM_IDX[@]}")
+  elif (( DREAM_NREM_PASSES > 0 )); then
+    _widx=("${WEIGHTED_REM_IDX[@]}")
+  else
+    _widx=("${WEIGHTED_LENS_IDX[@]}")
+  fi
+  if ((${#_widx[@]} > 0)); then
+    lens_index="${_widx[$((iteration % ${#_widx[@]}))]}"
+  else
+    lens_index=$((iteration % ${#lens_arr[@]}))
+  fi
   lens_key="${lens_arr[$lens_index]}"
   lens_text="${prompt_arr[$lens_index]}"
   mode="single"
@@ -1112,7 +1187,11 @@ launch_iteration() {
   if (( cross_modulo > 0 )) && ((cluster_count >= 2 && iteration % cross_modulo == cross_modulo - 1)); then
     mode="cross"
     desired=$((desired + 2))
-    first_index=$((iteration % cluster_count))
+    if ((${#WEIGHTED_CLUSTER_IDX[@]} > 0)); then
+      first_index="${WEIGHTED_CLUSTER_IDX[$((iteration % ${#WEIGHTED_CLUSTER_IDX[@]}))]}"
+    else
+      first_index=$((iteration % cluster_count))
+    fi
     second_index="$(pick_second_cluster_index "$first_index" "$cluster_count")"
 
     line="$(cluster_line_at "$first_index")"
@@ -1125,7 +1204,11 @@ launch_iteration() {
     selected=("${selected_a[@]}" "${selected_b[@]}")
     domain_label="$first_domain/$first_cluster + $second_domain/$second_cluster"
   else
-    first_index=$((iteration % cluster_count))
+    if ((${#WEIGHTED_CLUSTER_IDX[@]} > 0)); then
+      first_index="${WEIGHTED_CLUSTER_IDX[$((iteration % ${#WEIGHTED_CLUSTER_IDX[@]}))]}"
+    else
+      first_index=$((iteration % cluster_count))
+    fi
     line="$(cluster_line_at "$first_index")"
     IFS=$'\t' read -r first_domain first_cluster <<< "$line"
 
@@ -1887,6 +1970,25 @@ main() {
   : > "$CANDIDATES_FILE"
   : > "$USAGE_SINK"
   : > "$SONNET_SINK"
+
+  # Петля фидбэка: взвесить ротацию линз и кластеров по оценкам из .feedback.jsonl.
+  # При отсутствии оценок веса равны → массивы = [0..n-1] → исходный round-robin.
+  if [[ "${DREAM_FEEDBACK_BIAS:-1}" == "1" ]] && ((cluster_count > 0)); then
+    local lens_wfile dom_wfile ci cline cdom
+    local -a cl_domains=()
+    lens_wfile="$(mktemp "${DREAM_OUT_DIR}/.fb-lens.XXXXXX")"; register_temp_file "$lens_wfile"
+    dom_wfile="$(mktemp "${DREAM_OUT_DIR}/.fb-dom.XXXXXX")"; register_temp_file "$dom_wfile"
+    fb_weight_lines lens   > "$lens_wfile" || true
+    fb_weight_lines domain > "$dom_wfile"  || true
+    read -r -a WEIGHTED_NREM_IDX <<< "$(build_weighted_idx "${#NREM_LENS_KEYS[@]}" "$lens_wfile" "${NREM_LENS_KEYS[@]}")"
+    read -r -a WEIGHTED_REM_IDX  <<< "$(build_weighted_idx "${#REM_LENS_KEYS[@]}"  "$lens_wfile" "${REM_LENS_KEYS[@]}")"
+    read -r -a WEIGHTED_LENS_IDX <<< "$(build_weighted_idx "${#LENS_KEYS[@]}"      "$lens_wfile" "${LENS_KEYS[@]}")"
+    for ((ci = 0; ci < cluster_count; ci++)); do
+      cline="$(cluster_line_at "$ci")"; cdom="${cline%%$'\t'*}"; cl_domains[$ci]="${cdom:-?}"
+    done
+    read -r -a WEIGHTED_CLUSTER_IDX <<< "$(build_weighted_idx "$cluster_count" "$dom_wfile" "${cl_domains[@]}")"
+    log "stage=generation event=feedback_bias lens_rot=${#WEIGHTED_REM_IDX[@]} cluster_rot=${#WEIGHTED_CLUSTER_IDX[@]} base_clusters=$cluster_count"
+  fi
 
   STAGE="generation"
   if ((cluster_count > 0)); then

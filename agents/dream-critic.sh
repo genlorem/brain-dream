@@ -26,6 +26,7 @@ REPO="${BRAIN_DREAM_REPO:-$(cd "$AGENT_DIR/.." && pwd)}"
 DREAM_NODE_ROOT="${DREAM_NODE_ROOT:-$HOME/brain/dreams}"
 INSIGHT_REGISTRY="${INSIGHT_REGISTRY:-$DREAM_NODE_ROOT/.insight-hashes.jsonl}"
 PERMANENT_DIR="$DREAM_NODE_ROOT/permanent"
+FEEDBACK_FILE="${DREAM_FEEDBACK:-$DREAM_NODE_ROOT/.feedback.jsonl}"
 DREAM_CRITIC_RUBRIC="${DREAM_CRITIC_RUBRIC:-$REPO/rubrics/dream-insight-v1.0.yaml}"
 VENV_PYTHON="${VENV_PYTHON:-/home/gen/brain/engine/.venv/bin/python3}"
 
@@ -187,12 +188,25 @@ candidates_file=$(mktemp /tmp/critic-candidates.XXXXXX)
 prompt_file=$(mktemp /tmp/critic-prompt.XXXXXX)
 trap 'rm -f "$candidates_file" "$prompt_file" 2>/dev/null' EXIT
 
-# Top by (hit_count * confidence) within window, meeting minimums
+# Карта последних вердиктов по хэшу из .feedback.jsonl (петля фидбэка).
+# noise → кандидат исключается из промоушна; useful → бонус к score; known →
+# лёгкий штраф (не новость). Нет файла/оценки → нейтрально (множитель 1.0).
+fb_map='{}'
+if [ -f "$FEEDBACK_FILE" ]; then
+  fb_map=$(jq -s 'sort_by(.epoch) | reduce .[] as $x ({}; .[$x.hash] = $x.verdict)' "$FEEDBACK_FILE" 2>/dev/null || printf '{}')
+fi
+
+# Top by (hit_count * confidence * feedback_multiplier) within window, meeting minimums
 jq -c --argjson cutoff "$cutoff_epoch" \
    --argjson min_c "$PROMOTE_THRESHOLD_CONFIDENCE" \
    --argjson min_h "$PROMOTE_MIN_HITS" \
+   --argjson fb "$fb_map" \
    'select(.last_seen_epoch >= $cutoff and .confidence >= $min_c and .hit_count >= $min_h)
-    | . + {score: ((.hit_count * .confidence) // 0)}' \
+    | (($fb[.hash]) // "") as $v
+    | select($v != "noise")
+    | . + {fb_verdict: $v,
+           score: (((.hit_count * .confidence) // 0)
+                   * (if $v == "useful" then 1.5 elif $v == "known" then 0.85 else 1.0 end))}' \
    "$INSIGHT_REGISTRY" \
   | jq -s -c --argjson n "$TOP_N" 'sort_by(-.score) | .[:$n] | .[]' \
   > "$candidates_file"
