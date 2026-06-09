@@ -265,7 +265,7 @@ fi
     domain=$(printf '%s' "$c" | jq -r '.domain')
     hits=$(printf '%s' "$c" | jq -r '.hit_count')
     conf=$(printf '%s' "$c" | jq -r '.confidence')
-    printf '- hash=%s | %s | lens=%s domain=%s hits=%s confidence=%s\n' \
+    printf -- '- hash=%s | %s | lens=%s domain=%s hits=%s confidence=%s\n' \
       "$hash" "$title" "$lens" "$domain" "$hits" "$conf"
   done < "$candidates_file"
 } > "$prompt_file"
@@ -306,10 +306,31 @@ fi
 # ── Parse verdicts (JSONL) and compute scores ─────────────────────────────────
 verdicts_file=$(mktemp /tmp/critic-verdicts.XXXXXX)
 trap 'rm -f "$candidates_file" "$prompt_file" "$verdicts_file" 2>/dev/null' EXIT
-printf '%s\n' "$result_text" \
-  | sed -E '/^[[:space:]]*```/d' \
-  | jq -c -R 'fromjson? // empty | select(type == "object" and has("hash"))' \
-  > "$verdicts_file" 2>/dev/null || true
+# Робастный парсинг ответа Sonnet: python-сканер выдёргивает JSON-объекты с ключом
+# "hash" из произвольного текста — держит ```fence (вкл. ```jsonl), JSONL,
+# pretty-print (многострочные объекты), обёртку в массив и прозаичную преамбулу.
+# Прежний `jq -R fromjson` парсил построчно и давал 0 вердиктов на pretty-ответе
+# (реальная причина promoted=0 при 20 кандидатах).
+printf '%s' "$result_text" | python3 -c '
+import sys, json
+text = sys.stdin.read()
+dec = json.JSONDecoder()
+i, n = 0, len(text)
+while i < n:
+    while i < n and text[i] not in "{[":
+        i += 1
+    if i >= n:
+        break
+    try:
+        obj, end = dec.raw_decode(text, i)
+    except json.JSONDecodeError:
+        i += 1
+        continue
+    i = end
+    for it in (obj if isinstance(obj, list) else [obj]):
+        if isinstance(it, dict) and "hash" in it:
+            print(json.dumps(it, ensure_ascii=False))
+' > "$verdicts_file" 2>/dev/null || true
 
 # Load weights for scoring
 w_confidence=$(printf '%s' "$rubric_json" | jq -r '.categories.confidence.weight')
