@@ -65,6 +65,8 @@ Env params:
   DREAM_COST_LIMIT_USD  default: 0.50   (денежный потолок на Gemini за ночь; 0 = выкл)
   DREAM_PRICE_IN_PER_M  default: 1.50   (цена входных токенов за 1M)
   DREAM_PRICE_OUT_PER_M default: 9.00   (цена выходных токенов за 1M)
+  DREAM_SATURATION_MIN_YIELD       default: 3   (early-stop: мин. прирост кандидатов за интервал; 0 = выкл)
+  DREAM_SATURATION_CHECK_INTERVAL  default: 50  (проходов между проверками насыщения)
 
 Domain paths:
   travelmart -> $HOME/brain/travelmart/nodes
@@ -102,6 +104,15 @@ DREAM_OVERRUN_MIN="${DREAM_OVERRUN_MIN:-20}"
 DREAM_CONCURRENCY="${DREAM_CONCURRENCY:-3}"
 DREAM_OUT_DIR="${DREAM_OUT_DIR:-$HOME/brain/dreams}"
 DREAM_IMAGE_MODEL="${DREAM_IMAGE_MODEL:-gemini-2.5-flash-image}"
+
+# Early-stop по насыщению кандидатов. Уникальный сигнал исчерпывается в первых
+# ~100 проходах; дальше dedup (content_hash_insight) поглощает повторы и проходы
+# жгут бюджет почти без выхлопа. Каждые DREAM_SATURATION_CHECK_INTERVAL проходов
+# сравниваем прирост строк в CANDIDATES_FILE: если он < DREAM_SATURATION_MIN_YIELD
+# — обрываем генерацию. Работает и в Gemini-, и в Sonnet-фазе.
+# DREAM_SATURATION_MIN_YIELD=0 полностью отключает проверку.
+DREAM_SATURATION_MIN_YIELD="${DREAM_SATURATION_MIN_YIELD:-3}"
+DREAM_SATURATION_CHECK_INTERVAL="${DREAM_SATURATION_CHECK_INTERVAL:-50}"
 
 # Денежный потолок на Gemini-генерацию за ночь (в долларах). Считаем фактический
 # расход по токенам из ответов API и останавливаем генерацию при достижении
@@ -283,7 +294,8 @@ is_nonneg_number() {
 validate_params() {
   local name value
 
-  for name in DREAM_MAX_RUNS DREAM_OVERRUN_RUNS DREAM_OVERRUN_MIN DREAM_CONCURRENCY; do
+  for name in DREAM_MAX_RUNS DREAM_OVERRUN_RUNS DREAM_OVERRUN_MIN DREAM_CONCURRENCY \
+              DREAM_SATURATION_MIN_YIELD DREAM_SATURATION_CHECK_INTERVAL; do
     value="${!name}"
     if ! is_nonnegative_int "$value"; then
       log "stage=start error=invalid_integer param=$name value=$value"
@@ -306,6 +318,14 @@ validate_params() {
 
   if ((DREAM_CONCURRENCY < 1)); then
     log "stage=start error=invalid_concurrency value=$DREAM_CONCURRENCY"
+    exit 1
+  fi
+
+  # Интервал должен быть >=1: при 0 чекпоинт срабатывал бы каждый проход и почти
+  # гарантированно ронял генерацию на первом же шаге. Отключение проверки — через
+  # DREAM_SATURATION_MIN_YIELD=0, а не через интервал.
+  if ((DREAM_SATURATION_CHECK_INTERVAL < 1)); then
+    log "stage=start error=invalid_saturation_interval value=$DREAM_SATURATION_CHECK_INTERVAL"
     exit 1
   fi
 }
@@ -1294,6 +1314,29 @@ candidate_count() {
   fi
 }
 
+# Проверка насыщения для pass-цикла. Состояние держит вызывающий в двух
+# глобальных переменных (имена передаются 1-м и 2-м аргументами через nameref):
+# prev_count — кол-во кандидатов на прошлом чекпоинте, passes_since — проходов с
+# тех пор. Возвращает 0 (стоп), если интервал набран и прирост < min_yield.
+# 3-й аргумент — метка движка для лога. set -e: инкремент делаем через
+# присваивание, а не (( x++ )), чтобы нулевой результат не уронил скрипт.
+saturation_reached() {
+  local -n _sat_prev="$1" _sat_since="$2"
+  local label="$3" cur delta
+  (( DREAM_SATURATION_MIN_YIELD > 0 )) || return 1
+  _sat_since=$(( _sat_since + 1 ))
+  (( _sat_since >= DREAM_SATURATION_CHECK_INTERVAL )) || return 1
+  cur="$(candidate_count)"
+  delta=$(( cur - _sat_prev ))
+  _sat_prev=$cur
+  _sat_since=0
+  if (( delta < DREAM_SATURATION_MIN_YIELD )); then
+    log "stage=generation event=early_stop reason=saturation engine=$label candidates=$cur delta=$delta interval=$DREAM_SATURATION_CHECK_INTERVAL min_yield=$DREAM_SATURATION_MIN_YIELD"
+    return 0
+  fi
+  return 1
+}
+
 candidate_breakdown() {
   local field="$1"
 
@@ -2006,6 +2049,7 @@ main() {
     # пустоту (skip_empty_sample не инкрементирует LAUNCHED, значит max_runs
     # сам по себе не остановит). По аналогии с sonnet-циклом ниже.
     local iteration_cap=$((DREAM_MAX_RUNS * 3 + 10))
+    local _gsat_prev=0 _gsat_since=0
     while [[ "$RUN_ENGINE" == "gemini" ]] && deadline_generation_open && ((ITERATION < iteration_cap)); do
       while ((${#PIDS[@]} >= DREAM_CONCURRENCY)); do
         wait_for_one_job
@@ -2015,6 +2059,11 @@ main() {
         ITERATION=$((ITERATION + 1))
       else
         ITERATION=$((ITERATION + 1))
+      fi
+
+      if saturation_reached _gsat_prev _gsat_since gemini; then
+        STOP_REASON="saturation"
+        break
       fi
 
       # Пейсинг под free-tier лимит (20 запросов/мин у gemini-2.5-flash):
@@ -2058,6 +2107,10 @@ main() {
     STOP_REASON_SONNET="completed"
     log "stage=sonnet event=start target_passes=$sonnet_target session_cap=${DREAM_SONNET_SESSION_CAP_PCT}% session_limit=$DREAM_SONNET_SESSION_LIMIT_CALLS model=$DREAM_SONNET_MODEL concurrency=$DREAM_SONNET_CONCURRENCY"
     # siter-кап страхует от бесконечного цикла, если сэмплы пустые.
+    # Чекпоинт насыщения seed-им текущим счётчиком: в фазе сравнения в файле уже
+    # лежат Gemini-кандидаты, и мерить надо именно прирост от Sonnet.
+    local _ssat_prev _ssat_since=0
+    _ssat_prev="$(candidate_count)"
     while ((SONNET_LAUNCHED < sonnet_target && siter < sonnet_target * 2 + 5)); do
       if sonnet_quota_reached; then STOP_REASON_SONNET="session_cap"; break; fi
       if ((DEADLINE_EPOCH > 0)); then
@@ -2071,6 +2124,10 @@ main() {
         SONNET_LAUNCHED=$((SONNET_LAUNCHED + 1))
       fi
       siter=$((siter + 1))
+      if saturation_reached _ssat_prev _ssat_since sonnet; then
+        STOP_REASON_SONNET="saturation"
+        break
+      fi
       sleep "${DREAM_SONNET_SLEEP:-0}"
     done
     while ((${#PIDS[@]} > 0)); do
