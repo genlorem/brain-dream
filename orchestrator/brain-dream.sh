@@ -164,7 +164,7 @@ DREAM_NODE_ROOT="${DREAM_NODE_ROOT:-$HOME/brain/dreams}"
 DREAM_TG_MODE="${DREAM_TG_MODE:-legacy}"
 
 # Интерактивная оценка инсайтов кнопками в Telegram. >0 = после дайджеста (режим
-# single) шлём отдельное сообщение с топ-N кандидатов и сеткой кнопок 👍/🤷/👎.
+# single) шлём отдельное сообщение с топ-N кандидатов и сеткой кнопок 👍/➕/👎.
 # Нажатие обрабатывает digest-bot (handlers/dream.py) → dream-feedback.sh.
 # 0 = выключить кнопки.
 DREAM_FEEDBACK_BUTTONS="${DREAM_FEEDBACK_BUTTONS:-10}"
@@ -1767,7 +1767,7 @@ send_telegram_message_markup() {
 }
 
 # Интерактивная оценка: одно сообщение с нумерованным списком топ-N кандидатов
-# по confidence и сеткой кнопок (строка на инсайт: 👍/🤷/👎). callback_data =
+# по confidence и сеткой кнопок (строка на инсайт: 👍/➕/👎). callback_data =
 # df:<content_hash>:<u|k|n>:<idx>. Нажатие ловит digest-bot → dream-feedback.sh.
 send_feedback_buttons() {
   local n="${DREAM_FEEDBACK_BUTTONS:-10}" payload lines markup top_count
@@ -1786,7 +1786,7 @@ send_feedback_buttons() {
         kb: { inline_keyboard: ($top | to_entries | map(
                 (.key+1) as $i | (.value.content_hash) as $h |
                 [ {text:"\($i) 👍", callback_data:"df:\($h):u:\($i)"},
-                  {text:"\($i) 🤷", callback_data:"df:\($h):k:\($i)"},
+                  {text:"\($i) ➕", callback_data:"df:\($h):k:\($i)"},
                   {text:"\($i) 👎", callback_data:"df:\($h):n:\($i)"} ])) } }
   ' "$CANDIDATES_FILE" 2>/dev/null)"
 
@@ -1798,7 +1798,7 @@ send_feedback_buttons() {
   markup="$(jq -c '.kb' <<<"$payload")"
 
   send_telegram_message_markup \
-    "🌙 Сон мозга ${UTC_DATE} — оцени инсайты"$'\n\n'"${lines}"$'\n\n'"👍 полезно · 🤷 знал · 👎 мимо" \
+    "🌙 Сон мозга ${UTC_DATE} — оцени инсайты"$'\n\n'"${lines}"$'\n\n'"👍 полезно · ➕ знал · 👎 мимо" \
     "$markup"
 }
 
