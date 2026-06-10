@@ -249,6 +249,22 @@ GitHub: https://github.com/genlorem/brain-dream/blob/main/proposals/${proposal_d
       --data-urlencode "chat_id=${DIGEST_ADMIN_CHAT_ID}" \
       --data-urlencode "text=$tg_text" \
       -o /dev/null 2>/dev/null && log INFO "tg_sent" || log WARN "tg_failed"
+
+    # Per-proposal сообщения с кнопкой запуска. Нажатие в digest-bot спавнит
+    # чистую CC-сессию (brain-dream), которая реализует пропозал. callback_data =
+    # prop:<date>:<n>:go.
+    while IFS= read -r pline; do
+      pnum=$(printf '%s' "$pline" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+      [ -z "$pnum" ] && continue
+      ptitle=$(printf '%s' "$pline" | sed -E 's/^##[[:space:]]*Proposal[[:space:]]*#[0-9]+:?[[:space:]]*//')
+      pmarkup=$(jq -nc --arg cb "prop:${proposal_date}:${pnum}:go" \
+        '{inline_keyboard:[[{text:"🚀 Внедрить (спавн CC-сессии)",callback_data:$cb}]]}')
+      curl -fs -X POST "https://api.telegram.org/bot${DIGEST_BOT_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=${DIGEST_ADMIN_CHAT_ID}" \
+        --data-urlencode "text=📌 Proposal #${pnum}: ${ptitle}" \
+        --data-urlencode "reply_markup=${pmarkup}" \
+        -o /dev/null 2>/dev/null || true
+    done < <(grep -E '^##[[:space:]]*Proposal[[:space:]]*#[0-9]+' "$proposal_file" 2>/dev/null)
   fi
 fi
 
