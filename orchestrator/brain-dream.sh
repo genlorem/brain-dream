@@ -1422,7 +1422,11 @@ PROMPT
     cat "$_candidates_for_prompt"
   } > "$PROMPT_FILE"
 
-  if synthesis_text="$(claude -p "$(cat "$PROMPT_FILE")" 2>/dev/null)"; then
+  # Промпт идёт через stdin, НЕ одним CLI-аргументом: при ~120 кандидатах он
+  # превышает лимит Linux на длину одного аргумента (MAX_ARG_STRLEN ≈ 128 КБ) →
+  # «Argument list too long» → мгновенный фейл синтеза (нода = сырой fallback).
+  if synthesis_text="$(claude -p --model "$DREAM_SONNET_MODEL" < "$PROMPT_FILE" 2>/dev/null)" \
+     && [[ -n "$synthesis_text" ]]; then
     printf '%s\n' "$synthesis_text"
   else
     log "stage=synthesis event=claude_failed action=fallback_synthesis"
