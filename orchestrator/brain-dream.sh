@@ -1769,8 +1769,22 @@ send_telegram_message_markup() {
 # Интерактивная оценка: одно сообщение с нумерованным списком топ-N кандидатов
 # по confidence и сеткой кнопок (строка на инсайт: 👍/➕/👎). callback_data =
 # df:<content_hash>:<u|k|n>:<idx>. Нажатие ловит digest-bot → dream-feedback.sh.
+# Синхронно опубликовать ноду сна в Notion (идемпотентно с cron-publisher 18:30)
+# и вернуть URL полного документа — чтобы вложить ссылку в дайджест сразу.
+# Publisher пишет notion_url во frontmatter ноды; читаем оттуда. Best-effort.
+publish_dream_and_get_url() {
+  [[ "${DREAM_PUBLISH_NOTION:-1}" == "1" ]] || return 0
+  local node="${DREAM_NODE_ROOT:-$HOME/brain/dreams}/nodes/dream-${UTC_DATE}.md"
+  local pub="$BRAIN_DREAM_REPO/agents/dream-publisher-notion.sh"
+  [[ -f "$node" && -f "$pub" ]] || return 0
+  printf '{"invoked_by":"brain-dream"}\n' | timeout 90 bash "$pub" >/dev/null 2>&1 || true
+  grep -m1 '^notion_url:' "$node" 2>/dev/null \
+    | sed -E "s/^notion_url:[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*$//"
+}
+
 send_feedback_buttons() {
-  local n="${DREAM_FEEDBACK_BUTTONS:-10}" payload lines markup top_count
+  local link_url="${1:-}"
+  local n="${DREAM_FEEDBACK_BUTTONS:-10}" payload lines markup top_count footer
 
   (( n > 0 )) || return 0
   [[ -s "$CANDIDATES_FILE" ]] || return 0
@@ -1797,8 +1811,14 @@ send_feedback_buttons() {
   lines="$(jq -r '.lines' <<<"$payload")"
   markup="$(jq -c '.kb' <<<"$payload")"
 
+  # Ссылка на полный текст (суть/почему/действие/источники по каждому инсайту).
+  footer="👍 полезно · ➕ знал · 👎 мимо"
+  if [[ -n "$link_url" ]]; then
+    footer="${footer}"$'\n\n'"📖 Полный текст (суть · почему · действие): ${link_url}"
+  fi
+
   send_telegram_message_markup \
-    "🌙 Сон мозга ${UTC_DATE} — оцени инсайты"$'\n\n'"${lines}"$'\n\n'"👍 полезно · ➕ знал · 👎 мимо" \
+    "🌙 Сон мозга ${UTC_DATE} — оцени инсайты"$'\n\n'"${lines}"$'\n\n'"${footer}" \
     "$markup"
 }
 
@@ -2188,6 +2208,12 @@ main() {
     write_dream_node "$synthesis_text"
   fi
 
+  # Опубликовать ноду в Notion и получить ссылку на полный текст для дайджеста.
+  local notion_url=""
+  if [[ "$DREAM_WRITE_NODE" == "1" ]]; then
+    notion_url="$(publish_dream_and_get_url || true)"
+  fi
+
   if [[ "$DREAM_TG_MODE" == "single" ]]; then
     # Одно сообщение: обложка (cover-only) + топ-10 в подписи. Без картинок
     # по инсайтам.
@@ -2199,7 +2225,7 @@ main() {
     else
       send_telegram_message "$caption"
     fi
-    send_feedback_buttons
+    send_feedback_buttons "$notion_url"
   else
     summary_text="$(telegram_summary_text)"
     send_telegram_message "$summary_text"
