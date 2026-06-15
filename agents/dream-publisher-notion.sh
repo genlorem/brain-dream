@@ -517,72 +517,138 @@ PYEOF
 # ── Markdown body → Notion blocks ─────────────────────────────────────────────
 body_to_blocks_json() {
   local body="$1"
-  python3 - <<PYEOF
-import sys, json
+  DREAM_BODY="$body" python3 - <<'PYEOF'
+import os, json, re
 
-body = """${body//\"/\\\"}"""
+body = os.environ.get('DREAM_BODY', '')
+MAX = 2000
 
-def make_rich_text(content):
-    chunks = []
-    while len(content) > 2000:
-        chunks.append(content[:2000])
-        content = content[2000:]
-    if content:
-        chunks.append(content)
-    return [{"type": "text", "text": {"content": c}} for c in chunks]
+def _chunks(s):
+    out = []
+    while len(s) > MAX:
+        out.append(s[:MAX]); s = s[MAX:]
+    if s or not out:
+        out.append(s)
+    return out
 
+# Inline markdown: **bold**, `code`, [label](url)
+INLINE_RE = re.compile(r'\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\)')
+
+def rich_text(text):
+    items = []
+    pos = 0
+    for m in INLINE_RE.finditer(text):
+        if m.start() > pos:
+            for c in _chunks(text[pos:m.start()]):
+                items.append({"type": "text", "text": {"content": c}})
+        if m.group(1) is not None:        # bold
+            for c in _chunks(m.group(1)):
+                items.append({"type": "text", "text": {"content": c},
+                              "annotations": {"bold": True}})
+        elif m.group(2) is not None:      # inline code
+            for c in _chunks(m.group(2)):
+                items.append({"type": "text", "text": {"content": c},
+                              "annotations": {"code": True}})
+        else:                              # link
+            label, url = m.group(3), m.group(4)
+            for c in _chunks(label):
+                items.append({"type": "text",
+                              "text": {"content": c, "link": {"url": url}}})
+        pos = m.end()
+    if pos < len(text):
+        for c in _chunks(text[pos:]):
+            items.append({"type": "text", "text": {"content": c}})
+    if not items:
+        items = [{"type": "text", "text": {"content": ""}}]
+    return items
+
+def is_table_row(line):
+    s = line.strip()
+    return s.startswith('|') and s.endswith('|') and s.count('|') >= 2
+
+def is_table_sep(line):
+    s = line.strip().strip('|').replace('|', '')
+    return bool(s) and set(s) <= set(' -:')
+
+def split_cells(line):
+    return [c.strip() for c in line.strip().strip('|').split('|')]
+
+lines = body.split('\n')
+n = len(lines)
 blocks = []
 in_code = False
 code_lines = []
+i = 0
 
-for line in body.split('\n'):
-    stripped = line.rstrip()
+while i < n:
+    raw = lines[i]
+    stripped = raw.rstrip()
 
     # Code fence toggle
-    if stripped.startswith('\`\`\`'):
+    if stripped.startswith('```'):
         if in_code:
-            # End code block
             code_content = '\n'.join(code_lines)
-            blocks.append({
-                "object": "block",
-                "type": "code",
-                "code": {
-                    "rich_text": make_rich_text(code_content or " "),
-                    "language": "plain text"
-                }
-            })
-            code_lines = []
-            in_code = False
+            blocks.append({"object": "block", "type": "code", "code": {
+                "rich_text": [{"type": "text", "text": {"content": c}}
+                              for c in _chunks(code_content or " ")],
+                "language": "plain text"}})
+            code_lines = []; in_code = False
         else:
             in_code = True
-        continue
+        i += 1; continue
 
     if in_code:
-        code_lines.append(stripped)
-        continue
+        code_lines.append(stripped); i += 1; continue
+
+    # Markdown table: header row + separator + body rows
+    if is_table_row(raw) and i + 1 < n and is_table_sep(lines[i + 1]):
+        header = split_cells(raw)
+        width = len(header)
+        rows = [header]
+        j = i + 2
+        while j < n and is_table_row(lines[j]) and not is_table_sep(lines[j]):
+            rows.append(split_cells(lines[j])); j += 1
+        children = []
+        for r in rows:
+            cells = (r + [''] * width)[:width]
+            children.append({"object": "block", "type": "table_row",
+                "table_row": {"cells": [rich_text(c) for c in cells]}})
+        blocks.append({"object": "block", "type": "table", "table": {
+            "table_width": width, "has_column_header": True,
+            "has_row_header": False, "children": children}})
+        i = j; continue
 
     if not stripped:
-        continue
+        i += 1; continue
 
-    if stripped.startswith('## '):
-        text = stripped[3:]
-        blocks.append({"object":"block","type":"heading_2",
-            "heading_2":{"rich_text": make_rich_text(text)}})
-    elif stripped.startswith('### '):
-        text = stripped[4:]
-        blocks.append({"object":"block","type":"heading_3",
-            "heading_3":{"rich_text": make_rich_text(text)}})
+    # Horizontal rule → divider
+    if re.match(r'^(-{3,}|\*{3,}|_{3,})$', stripped):
+        blocks.append({"object": "block", "type": "divider", "divider": {}})
+        i += 1; continue
+
+    if stripped.startswith('### '):
+        blocks.append({"object": "block", "type": "heading_3",
+            "heading_3": {"rich_text": rich_text(stripped[4:])}})
+    elif stripped.startswith('## '):
+        blocks.append({"object": "block", "type": "heading_2",
+            "heading_2": {"rich_text": rich_text(stripped[3:])}})
+    elif stripped.startswith('# '):
+        blocks.append({"object": "block", "type": "heading_1",
+            "heading_1": {"rich_text": rich_text(stripped[2:])}})
     elif stripped.startswith('> '):
-        text = stripped[2:]
-        blocks.append({"object":"block","type":"quote",
-            "quote":{"rich_text": make_rich_text(text)}})
-    elif stripped.startswith('- '):
-        text = stripped[2:]
-        blocks.append({"object":"block","type":"bulleted_list_item",
-            "bulleted_list_item":{"rich_text": make_rich_text(text)}})
+        blocks.append({"object": "block", "type": "quote",
+            "quote": {"rich_text": rich_text(stripped[2:])}})
+    elif stripped.startswith('- ') or stripped.startswith('* '):
+        blocks.append({"object": "block", "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": rich_text(stripped[2:])}})
+    elif re.match(r'^\d+\.\s+', stripped):
+        text = re.sub(r'^\d+\.\s+', '', stripped)
+        blocks.append({"object": "block", "type": "numbered_list_item",
+            "numbered_list_item": {"rich_text": rich_text(text)}})
     else:
-        blocks.append({"object":"block","type":"paragraph",
-            "paragraph":{"rich_text": make_rich_text(stripped)}})
+        blocks.append({"object": "block", "type": "paragraph",
+            "paragraph": {"rich_text": rich_text(stripped)}})
+    i += 1
 
 print(json.dumps(blocks, ensure_ascii=False))
 PYEOF
