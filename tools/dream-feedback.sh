@@ -99,5 +99,26 @@ case "${1:-help}" in
       '{ts:$ts, epoch:$epoch, hash:$h, verdict:$v} + (if $n != "" then {note:$n} else {} end)' \
       >> "$FEEDBACK"
     echo "OK: recorded $verdict for $resolved" >&2
+
+    # useful = триггер промоута: инсайт признан полезным → предложить завести
+    # из него ноду Brain (dream-promote). Только в интерактивном терминале —
+    # путь TG-бота (не-tty) не трогаем. Адресуем по сну инсайта (дата из реестра).
+    if [[ "$verdict" == "useful" && -t 0 && -t 1 ]]; then
+      promote="$(dirname "$0")/dream-promote.py"
+      dream_id=""
+      if [[ -f "$REGISTRY" ]]; then
+        dream_id=$(jq -r --arg h "$resolved" \
+          'select(.hash==$h) | .dream_id' "$REGISTRY" 2>/dev/null | head -1)
+      fi
+      dream_date="${dream_id#dream:}"
+      if [[ -x "$promote" && -n "$dream_date" ]]; then
+        printf 'Промоутнуть инсайт в Brain (сон %s)? [y/N] ' "$dream_date" >&2
+        read -r ans || ans=""
+        case "${ans,,}" in
+          y|yes|д|да) "$promote" "$dream_date" >&2 ;;
+          *) printf 'Позже: %s %s <N>\n' "$promote" "$dream_date" >&2 ;;
+        esac
+      fi
+    fi
     ;;
 esac

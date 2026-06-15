@@ -52,7 +52,8 @@ The biological analogue of sleep is **active**: hippocampal replay, synaptic hom
 - ✅ `guards.sh` — 5-layer protection for all agents (source-filter / rate-limit / cost-cb / depth / kill-switch).
 
 ### Tools (`tools/`)
-- ✅ `dream-feedback` — CLI for marking insights useful/noise/known. KPI loop closure.
+- ✅ `dream-feedback` — CLI for marking insights useful/noise/known. KPI loop closure. On a `useful` verdict (interactive) it offers to promote the insight.
+- ✅ `dream-promote` — turns one synthesized top-10 insight into a real Brain node (decision/lesson/note/procedure) in the right domain, auto-linked to the insight's sources and to the dream (`derived-from`). The bridge "dream noticed → graph uses it"; addressed by `date#N`, not content-hash. Git-committed in the target domain repo; needs a `brain_reindex` to surface.
 
 ### Cron schedule (UTC)
 | When | What |
