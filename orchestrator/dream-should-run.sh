@@ -22,8 +22,11 @@ LOG_FILE="${BRAIN_DREAM_LOG:-$HOME/life/state/logs/brain-dream.log}"
 STATE_FILE="${DREAM_TRIGGER_STATE:-$HOME/brain/dreams/.last-run.json}"
 
 DREAM_DOMAINS="${DREAM_DOMAINS:-travelmart personal}"
-THRESHOLD_NEW_NODES="${DREAM_TRIGGER_NEW_NODES:-20}"
-THRESHOLD_HOURS="${DREAM_TRIGGER_HOURS:-20}"
+THRESHOLD_NEW_NODES="${DREAM_TRIGGER_NEW_NODES:-15}"
+THRESHOLD_HOURS="${DREAM_TRIGGER_HOURS:-96}"
+# Типы нод, которые НЕ считаются «знанием» для триггера (сырые Slack-инжесты).
+# Осмысленные (decision/lesson/note/project/procedure/reference/person/…) считаются.
+EXCLUDE_TYPES="${DREAM_TRIGGER_EXCLUDE_TYPES:-message event thread comment task}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -41,17 +44,38 @@ fi
 
 hours_since=$(( (now_epoch - last_epoch) / 3600 ))
 
+# Считаем новые ноды, ОТ которых есть смысл «видеть сон» — т.е. осмысленные
+# (тип не из EXCLUDE_TYPES) И реально созданные после прошлого сна.
+# Сырые Slack-инжесты (message/event/thread/…) в счётчик не идут, иначе
+# travelmart-шланг триггерил бы сон почти ежедневно. Считаем по дате
+# observed_at/created_at из frontmatter, а НЕ по mtime: reindex/sync перебивает
+# mtime старым нодам, и счёт по файлу врёт в разы. mtime — лишь предфильтр.
+if (( last_epoch > 0 )); then
+  since_date=$(date -u -d "@$last_epoch" '+%Y-%m-%d')
+  find_args=(-newermt "@$last_epoch")
+else
+  since_date=$(date -u -d '1 day ago' '+%Y-%m-%d')   # первый запуск: за сутки
+  find_args=(-mtime -1)
+fi
+
+counts_new() {
+  local t d
+  t=$(grep -m1 -iE '^\s*(type|node_type):' "$f" 2>/dev/null \
+        | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]].*$//' | tr -d '"' | tr 'A-Z' 'a-z')
+  for ex in $EXCLUDE_TYPES; do [[ "$t" == "$ex" ]] && return 1; done   # сырой тип
+  d=$(grep -m1 -iE "^\s*(observed_at|created_at|date):" "$f" 2>/dev/null \
+        | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
+  [[ -z "$d" ]] && return 0                       # нет даты — считаем (редко)
+  [[ "$d" > "$since_date" || "$d" == "$since_date" ]]   # лексикографически = по дате
+}
+
 new_count=0
 for domain in $DREAM_DOMAINS; do
   root="$HOME/brain/$domain/nodes"
   [[ -d "$root" ]] || continue
-  if (( last_epoch > 0 )); then
-    count=$(find "$root" -type f -name '*.md' -newermt "@$last_epoch" 2>/dev/null | wc -l)
-  else
-    # первый запуск: считаем за «новое» всё, что обновлено за последние 24ч
-    count=$(find "$root" -type f -name '*.md' -mtime -1 2>/dev/null | wc -l)
-  fi
-  new_count=$((new_count + count))
+  while IFS= read -r f; do
+    counts_new && new_count=$((new_count + 1))
+  done < <(find "$root" -type f -name '*.md' "${find_args[@]}" 2>/dev/null)
 done
 
 reason=""
