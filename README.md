@@ -54,6 +54,7 @@ The biological analogue of sleep is **active**: hippocampal replay, synaptic hom
 ### Tools (`tools/`)
 - ✅ `dream-feedback` — CLI for marking insights useful/noise/known. KPI loop closure. On a `useful` verdict (interactive) it offers to promote the insight.
 - ✅ `dream-promote` — turns one synthesized top-10 insight into a real Brain node (decision/lesson/note/procedure) in the right domain, auto-linked to the insight's sources and to the dream (`derived-from`). The bridge "dream noticed → graph uses it"; addressed by `date#N`, not content-hash. Git-committed in the target domain repo; needs a `brain_reindex` to surface.
+- ✅ `dream-digest-dedup` — daily feed dedup against recent nights, **before** the TG publish. Each night is brewed in isolation, so the same takeaway can resurface several nights running under slightly different wording (the candidate-level content-hash dedup runs *before* synthesis, where Claude rephrases, so it misses this). A layer over the finished top-10: Gemini Flash compares tonight's insights against what was actually shown in the feed over the last `DREAM_DIGEST_DEDUP_DAYS` days (`.digest-published.jsonl`) and suppresses near-duplicates. Fail-open: no key / Gemini down / empty registry → the full feed publishes. The `dream-<date>.md`/Notion record stays complete — only the TG top-10 is filtered. Toggle `DREAM_DIGEST_DEDUP=1`.
 
 ### Cron schedule (UTC)
 | When | What |

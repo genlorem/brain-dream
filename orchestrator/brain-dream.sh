@@ -194,6 +194,18 @@ DREAM_SYNTH_TOP_N="${DREAM_SYNTH_TOP_N:-120}"
 # 0 = выкл (единая фаза, как раньше).
 DREAM_NREM_PASSES="${DREAM_NREM_PASSES:-20}"
 
+# Дедуп ленты дайджеста против недавних ночей (Gemini Flash). brain-dream варит
+# каждую ночь изолированно → один и тот же вывод может всплыть несколько ночей
+# подряд под другой формулировкой (content-hash дедуп кандидатов это не ловит:
+# он до синтеза, а Claude переформулирует). Слой поверх готового топ-10: Flash
+# сверяет сегодняшние инсайты с реально показанными за последние N дней
+# (.digest-published.jsonl) и гасит near-duplicate. Fail-open: при любой осечке
+# (нет ключа / Gemini упал / пустой реестр) лента публикуется целиком.
+# 1 = включено. Окно сравнения — DREAM_DIGEST_DEDUP_DAYS дней.
+DREAM_DIGEST_DEDUP="${DREAM_DIGEST_DEDUP:-1}"
+DREAM_DIGEST_DEDUP_DAYS="${DREAM_DIGEST_DEDUP_DAYS:-5}"
+DREAM_DIGEST_DEDUP_MODEL="${DREAM_DIGEST_DEDUP_MODEL:-flash}"
+
 LOG_FILE="$HOME/life/state/logs/brain-dream.log"
 GEMINI_SH="$ORCHESTRATOR_DIR/gemini.sh"
 UTC_DATE="$(date -u +%F)"
@@ -211,6 +223,11 @@ SONNET_LOCK="$SONNET_SINK.lock"
 NODES_FILE="$DREAM_OUT_DIR/.brain-dream-nodes.tsv"
 CLUSTERS_FILE="$DREAM_OUT_DIR/.brain-dream-clusters.tsv"
 PROMPT_FILE=""
+# Реестр показанных в ленте инсайтов (для дедупа против недавних ночей) и
+# готовый дедупнутый блок заголовков для подписи Telegram (заполняет
+# run_digest_dedup; пусто => digest_title_block падает на extract_top_titles).
+DIGEST_REGISTRY="$DREAM_OUT_DIR/.digest-published.jsonl"
+DIGEST_TITLES_FILE="$DREAM_OUT_DIR/.digest-titles.txt"
 
 TEMP_FILES=()
 PIDS=()
@@ -1655,19 +1672,23 @@ extract_top_titles() {
 
   awk '
     function clean(s) {
-      sub(/^#+[[:space:]]*/, "", s)
-      sub(/^[0-9]+[.)][[:space:]]*/, "", s)
-      sub(/^[0-9]+[[:space:]]*[-–—][[:space:]]*/, "", s)
+      sub(/^#+[[:space:]]*/, "", s)        # markdown-заголовок: ## / ####
+      sub(/^#[[:space:]]*/, "", s)         # остаток "#" в форме "#1"
+      sub(/^[0-9]+[[:space:]]*[.):—–-][[:space:]]*/, "", s)  # "N." / "N)" / "N —" / "N -"
       gsub(/\*\*/, "", s)
+      sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s)
       return s
     }
-    /^#{1,4}[[:space:]]*[0-9]+[.)[:space:]-]/ {
+    # Заголовок-пункт: "## #1 — …", "#### 1) …", "## 1. …".
+    /^#{1,6}[[:space:]]*#?[[:space:]]*[0-9]+[[:space:]]*[.):—–-]/ {
       title = clean($0)
       if (length(title) > 0) {
         count += 1
         print count ". " title
       }
+      next
     }
+    # Голый нумерованный пункт: "1. …", "1) …".
     /^[0-9]+[.)][[:space:]]+/ {
       title = clean($0)
       if (length(title) > 0) {
@@ -1685,6 +1706,50 @@ fallback_titles_from_candidates() {
   fi
 
   jq -r -s '.[0:10] | to_entries[] | ((.key + 1) | tostring) + ". " + .value.title' "$CANDIDATES_FILE"
+}
+
+# Дедуп ленты против недавних ночей. Тащит топ-10 из ## Синтез готового OUT_MD,
+# Gemini Flash сверяет с показанным за DREAM_DIGEST_DEDUP_DAYS дней
+# (.digest-published.jsonl), гасит повторы и кладёт дедупнутый нумерованный блок
+# в DIGEST_TITLES_FILE (его потом берёт digest_title_block). Сам инструмент
+# дописывает показанное в реестр и компактит его. Fail-open: при любой осечке
+# инструмент печатает все заголовки (или возвращает !=0) — лента не страдает.
+run_digest_dedup() {
+  local tool="$BRAIN_DREAM_REPO/tools/dream-digest-dedup.py"
+  if [[ ! -f "$tool" ]]; then
+    log "stage=digest-dedup event=tool_missing path=$tool"
+    return 0
+  fi
+  if python3 "$tool" render \
+       --synthesis "$OUT_MD" \
+       --registry "$DIGEST_REGISTRY" \
+       --today "$UTC_DATE" \
+       --days "$DREAM_DIGEST_DEDUP_DAYS" \
+       --gemini "$GEMINI_SH" \
+       --model "$DREAM_DIGEST_DEDUP_MODEL" \
+       --max-titles 10 \
+       > "$DIGEST_TITLES_FILE" 2> >(while IFS= read -r l; do log "stage=digest-dedup $l"; done); then
+    log "stage=digest-dedup event=done titles_file=$DIGEST_TITLES_FILE"
+  else
+    # !=0 → инсайты не распарсились; чистим файл, digest_title_block упадёт на
+    # extract_top_titles / candidate-fallback.
+    : > "$DIGEST_TITLES_FILE"
+    log "stage=digest-dedup event=fallback reason=no_insights"
+  fi
+}
+
+# Единый источник нумерованного блока заголовков для всех TG-веток: дедупнутый
+# блок из run_digest_dedup, иначе — extract_top_titles, иначе — кандидаты.
+digest_title_block() {
+  local titles
+  if [[ -s "$DIGEST_TITLES_FILE" ]]; then
+    cat "$DIGEST_TITLES_FILE"
+    return 0
+  fi
+  titles="$(extract_top_titles "$OUT_MD" || true)"
+  [[ -z "$titles" ]] && titles="$(fallback_titles_from_candidates || true)"
+  [[ -z "$titles" ]] && titles="топ-10 не извлечён; см. ноду/файл"
+  printf '%s\n' "$titles"
 }
 
 load_telegram_pair() {
@@ -1847,13 +1912,7 @@ send_telegram_photo() {
 telegram_summary_text() {
   local titles
 
-  titles="$(extract_top_titles "$OUT_MD" || true)"
-  if [[ -z "$titles" ]]; then
-    titles="$(fallback_titles_from_candidates || true)"
-  fi
-  if [[ -z "$titles" ]]; then
-    titles="топ-10 не извлечен; см. файл"
-  fi
+  titles="$(digest_title_block)"
 
   printf 'Сон мозга %s UTC\n\n%s\n\nGemini: $%s / $%s (%s)\nСтоп: %s\nФайл: %s\n' \
     "$UTC_DATE" "$titles" "$(spent_usd)" "$DREAM_COST_LIMIT_USD" \
@@ -1884,9 +1943,7 @@ send_telegram_photo_url() {
 telegram_caption_single() {
   local titles spend
 
-  titles="$(extract_top_titles "$OUT_MD" || true)"
-  [[ -z "$titles" ]] && titles="$(fallback_titles_from_candidates || true)"
-  [[ -z "$titles" ]] && titles="топ-10 не извлечён; см. ноду/файл"
+  titles="$(digest_title_block)"
 
   spend="Gemini: \$$(spent_usd)"
   if [[ "$DREAM_SONNET_COMPARE" == "1" ]]; then
@@ -2037,6 +2094,9 @@ main() {
   : > "$CANDIDATES_FILE"
   : > "$USAGE_SINK"
   : > "$SONNET_SINK"
+  # Сбрасываем прошлогодний дедупнутый блок: при выключенном дедупе или раннем
+  # выходе digest_title_block не должен подхватить заголовки вчерашней ночи.
+  : > "$DIGEST_TITLES_FILE"
 
   # Петля фидбэка: взвесить ротацию линз и кластеров по оценкам из .feedback.jsonl.
   # При отсутствии оценок веса равны → массивы = [0..n-1] → исходный round-robin.
@@ -2210,6 +2270,14 @@ main() {
   # Записать результат нодой в домен dreams (опц.).
   if [[ "$DREAM_WRITE_NODE" == "1" ]]; then
     write_dream_node "$synthesis_text"
+  fi
+
+  # Дедуп ленты против недавних ночей (Gemini Flash) ПЕРЕД публикацией в TG.
+  # Гасит near-duplicate инсайты, уже показанные за последние дни. OUT_MD/Notion
+  # остаются полным записями — фильтруется только показываемый в TG топ-10.
+  if [[ "$DREAM_DIGEST_DEDUP" == "1" ]]; then
+    STAGE="digest-dedup"
+    run_digest_dedup
   fi
 
   # Опубликовать ноду в Notion и получить ссылку на полный текст для дайджеста.
