@@ -285,10 +285,79 @@ record_usage() {
   fi
 }
 
+# Запись расхода токенов из JSON-вывода gemini CLI (бэкенд cli/OAuth). Формат
+# stats.models[<model>].tokens = {prompt,candidates,total,...}. Пишем ту же
+# схему строки, что record_usage (REST), чтобы brain-dream считал одинаково.
+record_usage_cli() {
+  local model="$1"
+  local resp="$2"
+  local sink line
+  sink="${GEMINI_USAGE_SINK:-}"
+  [[ -z "$sink" ]] && return 0
+
+  line="$(jq -c -n --arg ts "$(date -u +%FT%TZ)" --arg model "$model" \
+    --argjson t "$(jq -c --arg m "$model" '.stats.models[$m].tokens // {}' "$resp" 2>/dev/null || printf '{}')" '
+      {ts:$ts, model:$model,
+       prompt_tokens:($t.prompt // 0),
+       candidates_tokens:($t.candidates // 0),
+       total_tokens:($t.total // 0)}' 2>/dev/null)" || return 0
+  [[ -z "$line" ]] && return 0
+
+  if command -v flock >/dev/null 2>&1; then
+    {
+      flock 9
+      printf '%s\n' "$line" >>"$sink"
+    } 9>"${sink}.lock"
+  else
+    printf '%s\n' "$line" >>"$sink"
+  fi
+}
+
+# Бэкенд cli: вызвать локальный gemini CLI (OAuth-аккаунт, отдельная квота — не
+# API-ключ/spend-cap). Весь промпт идёт через stdin при пустом -p (минует
+# ARG_MAX). brain MCP исключаем (--allowed-mcp-server-names __none__), чтобы
+# модель не уходила в tool-call; жёсткий timeout страхует от зависания headless.
+call_gemini_cli() {
+  local model="$1"
+  local combined_file="$2"
+  local response_file timeout_s text
+
+  response_file="$(make_tmp)"
+  timeout_s="${GEMINI_CLI_TIMEOUT:-120}"
+
+  if ! timeout "$timeout_s" gemini -m "$model" -o json \
+        --allowed-mcp-server-names __none__ -p "" \
+        <"$combined_file" >"$response_file" 2>/dev/null; then
+    if jq -e '.error? // empty' "$response_file" >/dev/null 2>&1; then
+      jq -r '.error' "$response_file" >&2
+    elif [[ -s "$response_file" ]]; then
+      head -c 500 "$response_file" >&2
+    else
+      printf '%s\n' "Error: gemini CLI (OAuth) call failed or timed out" >&2
+    fi
+    return 1
+  fi
+
+  text="$(jq -r '.response // empty' "$response_file" 2>/dev/null)"
+  if [[ -z "$text" ]]; then
+    printf '%s\n' "Error: gemini CLI returned no text." >&2
+    return 1
+  fi
+
+  record_usage_cli "$model" "$response_file"
+  printf '%s\n' "$text"
+  return 0
+}
+
 call_gemini() {
   local model="$1"
   local combined_file="$2"
   local body_file response_file curl_config url
+
+  if [[ "${GEMINI_BACKEND:-api}" == "cli" ]]; then
+    call_gemini_cli "$model" "$combined_file"
+    return $?
+  fi
 
   body_file="$(make_tmp)"
   response_file="$(make_tmp)"
@@ -349,6 +418,10 @@ main() {
 
   need_cmd curl
   need_cmd jq
+  # Бэкенд cli (OAuth) ходит через локальный gemini CLI вместо REST+API-ключ.
+  if [[ "${GEMINI_BACKEND:-api}" == "cli" ]]; then
+    need_cmd gemini
+  fi
 
   if (($# == 0)); then
     usage
@@ -366,7 +439,8 @@ main() {
   fi
 
   [[ -n "$SUBCOMMAND" ]] || die "Error: missing subcommand. Use ask, repo, or stdin."
-  require_api_key
+  # API-ключ нужен только REST-бэкенду; cli/OAuth авторизуется через gemini CLI.
+  [[ "${GEMINI_BACKEND:-api}" == "cli" ]] || require_api_key
 
   combined_file="$(make_tmp)"
 

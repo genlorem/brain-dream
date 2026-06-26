@@ -289,6 +289,9 @@ def render(args) -> int:
 def gemini_ready(gemini_sh: str) -> bool:
     if not gemini_sh or not os.path.exists(gemini_sh):
         return False
+    # Бэкенд cli (OAuth) авторизуется через локальный gemini CLI — API-ключ не нужен.
+    if os.environ.get("GEMINI_BACKEND") == "cli":
+        return True
     if os.environ.get("GEMINI_API_KEY"):
         return True
     cfg = os.path.expanduser("~/.config/gemini/config.env")

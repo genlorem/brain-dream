@@ -123,6 +123,24 @@ DREAM_COST_LIMIT_USD="${DREAM_COST_LIMIT_USD:-0.50}"
 DREAM_PRICE_IN_PER_M="${DREAM_PRICE_IN_PER_M:-1.50}"
 DREAM_PRICE_OUT_PER_M="${DREAM_PRICE_OUT_PER_M:-9.00}"
 
+# Бэкенд Gemini-генерации:
+#   api (по умолчанию) — REST generativelanguage + API-ключ AIza… из
+#     ~/.config/gemini/config.env (биллинг на GCP-проект ключа, monthly spend cap).
+#   cli — локальный gemini CLI на OAuth-аккаунте (отдельная free-квота Code
+#     Assist, не доллары). Минусы: ~3-6с старта node на вызов и RPM-лимиты
+#     OAuth, поэтому держи DREAM_CONCURRENCY/DREAM_MAX_RUNS скромными и модель из
+#     поддерживаемых OAuth (gemini-2.5-flash; 3.5 через OAuth недоступна).
+# Пробрасывается в gemini.sh как GEMINI_BACKEND. На cli денежный потолок теряет
+# смысл (нет $-биллинга), а раздутые входные токены CLI ложно тригерят cap —
+# поэтому ниже обнуляем cost-cap и цены (отчёт показывает $0.00, что и есть факт).
+DREAM_GEMINI_BACKEND="${DREAM_GEMINI_BACKEND:-api}"
+if [[ "$DREAM_GEMINI_BACKEND" == "cli" ]]; then
+  export GEMINI_BACKEND="cli"
+  DREAM_COST_LIMIT_USD=0
+  DREAM_PRICE_IN_PER_M=0
+  DREAM_PRICE_OUT_PER_M=0
+fi
+
 # Вторая фаза генерации на Claude Sonnet (для сравнения с Gemini и как
 # fallback-продолжение, если Gemini рано упёрся в денежный лимит). Включается
 # DREAM_SONNET_COMPARE=1. По умолчанию ВЫКЛ — плановый cron работает как раньше.
@@ -2082,7 +2100,7 @@ main() {
   _DREAM_RECENT_WEIGHT_PCT_BASE="${DREAM_RECENT_WEIGHT_PCT:-70}"
   export _DREAM_RECENT_WEIGHT_PCT_BASE
 
-  log "stage=start domains=\"$DREAM_DOMAINS\" max_runs=$DREAM_MAX_RUNS deadline=${DREAM_DEADLINE_UTC:-none} concurrency=$DREAM_CONCURRENCY nrem_passes=$DREAM_NREM_PASSES"
+  log "stage=start domains=\"$DREAM_DOMAINS\" max_runs=$DREAM_MAX_RUNS deadline=${DREAM_DEADLINE_UTC:-none} concurrency=$DREAM_CONCURRENCY nrem_passes=$DREAM_NREM_PASSES gemini_backend=$DREAM_GEMINI_BACKEND"
 
   STAGE="collect"
   log "stage=collect event=start"
