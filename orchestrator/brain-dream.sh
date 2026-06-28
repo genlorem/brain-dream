@@ -70,7 +70,7 @@ Env params:
 
 Domain paths:
   travelmart -> $HOME/brain/travelmart/nodes
-  personal   -> $HOME/life/brain
+  personal   -> $HOME/brain/personal/nodes
 
 The script is read-only on domain data: no git ops, no reindex, no writes there.
 USAGE
