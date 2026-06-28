@@ -25,10 +25,19 @@
 INSIGHT_REGISTRY="${INSIGHT_REGISTRY:-$HOME/brain/dreams/.insight-hashes.jsonl}"
 DREAM_DEDUP_WINDOW_DAYS="${DREAM_DEDUP_WINDOW_DAYS:-14}"
 
+# Path to a pre-built flat file (one within-window hash per line) for fast grep
+# lookup. Empty = disabled; use registry_build_flat to populate before dedup.
+INSIGHT_HASH_FLAT="${INSIGHT_HASH_FLAT:-}"
+
 # Returns 0 if hash present and within window, 1 otherwise.
+# Uses INSIGHT_HASH_FLAT (grep) when available, falls back to per-lookup jq.
 registry_has_hash() {
   local h="$1"
   [[ -f "$INSIGHT_REGISTRY" ]] || return 1
+  if [[ -n "${INSIGHT_HASH_FLAT:-}" && -f "$INSIGHT_HASH_FLAT" ]]; then
+    grep -qxF -- "$h" "$INSIGHT_HASH_FLAT"
+    return
+  fi
   local cutoff
   cutoff=$(($(date -u +%s) - DREAM_DEDUP_WINDOW_DAYS * 86400))
   jq -e --arg h "$h" --argjson cutoff "$cutoff" '
@@ -87,4 +96,17 @@ registry_compact() {
   tmp="${INSIGHT_REGISTRY}.tmp.$$"
   jq -c --argjson cutoff "$cutoff" 'select(.last_seen_epoch >= $cutoff)' \
     "$INSIGHT_REGISTRY" > "$tmp" && mv "$tmp" "$INSIGHT_REGISTRY"
+}
+
+# Build a flat tmp file with within-window hashes (one per line) for fast grep.
+# Sets INSIGHT_HASH_FLAT to the tmp path; caller must register_temp_file it.
+registry_build_flat() {
+  [[ -f "$INSIGHT_REGISTRY" ]] || return 0
+  local cutoff tmp
+  cutoff=$(($(date -u +%s) - DREAM_DEDUP_WINDOW_DAYS * 86400))
+  tmp="$(mktemp)"
+  jq -r --argjson cutoff "$cutoff" \
+    'select(.last_seen_epoch >= $cutoff) | .hash' \
+    "$INSIGHT_REGISTRY" 2>/dev/null > "$tmp" || true
+  INSIGHT_HASH_FLAT="$tmp"
 }

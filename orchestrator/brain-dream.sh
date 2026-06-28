@@ -2239,6 +2239,14 @@ main() {
     log "stage=sonnet event=done launched=$SONNET_LAUNCHED reason=$STOP_REASON_SONNET session_share=$(sonnet_session_share_pct)% ref_api_cost=\$$(spent_usd_sonnet)"
   fi
 
+  # Flat-file lookup: однократно загружаем хэши реестра (в окне дедупа) в tmp
+  # и переключаем registry_has_hash на grep — вместо per-candidate jq-процесса.
+  if [[ -f "$INSIGHT_REGISTRY" ]]; then
+    registry_build_flat
+    [[ -n "${INSIGHT_HASH_FLAT:-}" ]] && register_temp_file "$INSIGHT_HASH_FLAT"
+    log "stage=dedup event=flat_built entries=$(wc -l < "${INSIGHT_HASH_FLAT:-/dev/null}" 2>/dev/null | tr -d '[:space:]')"
+  fi
+
   STAGE="dedup"
   dedup_against_registry
 
@@ -2279,11 +2287,9 @@ main() {
   # будут считать их повторами (с инкрементом confidence).
   register_new_candidates
 
-  # Раз в неделю компактим registry (выбрасываем записи вне окна).
-  if (( $(date -u +%u) == 7 )); then
-    registry_compact
-    log "stage=registry event=compacted_weekly"
-  fi
+  # Компактим registry каждую ночь: выбрасываем записи вне окна дедупа.
+  registry_compact
+  log "stage=registry event=compacted"
 
   # Записать результат нодой в домен dreams (опц.).
   if [[ "$DREAM_WRITE_NODE" == "1" ]]; then
