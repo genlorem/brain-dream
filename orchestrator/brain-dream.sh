@@ -205,6 +205,12 @@ DREAM_RECENT_WEIGHT_PCT="${DREAM_RECENT_WEIGHT_PCT:-70}"
 # Дефолт 120 = ~30K токенов промпта при средней длине инсайта.
 DREAM_SYNTH_TOP_N="${DREAM_SYNTH_TOP_N:-120}"
 
+# Pre-synthesis lens-balanced cap (proposal #3 dream-introspector 2026-06-28).
+# Если кандидатов больше порога (cli-backend даёт 2.5× при cost=0), сначала
+# режем до cap с балансом по линзам — иначе одна линза монополизирует
+# последующий top-N по confidence. 0 = выкл.
+DREAM_SYNTHESIS_CAP="${DREAM_SYNTHESIS_CAP:-250}"
+
 # NREM/REM-фазы сна (биологический аналог).
 # DREAM_NREM_PASSES первых итераций идут в NREM-режиме: узкие consolidating
 # линзы (problem/gap/stalled), малые сэмплы, агрессивный recency-bias.
@@ -330,7 +336,8 @@ validate_params() {
   local name value
 
   for name in DREAM_MAX_RUNS DREAM_OVERRUN_RUNS DREAM_OVERRUN_MIN DREAM_CONCURRENCY \
-              DREAM_SATURATION_MIN_YIELD DREAM_SATURATION_CHECK_INTERVAL; do
+              DREAM_SATURATION_MIN_YIELD DREAM_SATURATION_CHECK_INTERVAL \
+              DREAM_SYNTHESIS_CAP; do
     value="${!name}"
     if ! is_nonnegative_int "$value"; then
       log "stage=start error=invalid_integer param=$name value=$value"
@@ -1430,19 +1437,42 @@ run_synthesis() {
   PROMPT_FILE="$(mktemp "$DREAM_OUT_DIR/.brain-dream-claude-prompt.XXXXXX")"
   register_temp_file "$PROMPT_FILE"
 
+  # Proposal #3: lens-balanced pre-synthesis cap. При взрывном росте числа
+  # кандидатов (cli-backend, cost=0) берём срез равномерно по линзам — иначе
+  # одна линза монополизирует последующий top-N по confidence.
+  local _base_input="$CANDIDATES_FILE"
+  local _cap_total
+  _cap_total=$(wc -l < "$CANDIDATES_FILE" 2>/dev/null || echo 0)
+  if (( DREAM_SYNTHESIS_CAP > 0 && _cap_total > DREAM_SYNTHESIS_CAP )); then
+    local _capped
+    _capped="$(mktemp "$DREAM_OUT_DIR/.candidates-capped.XXXXXX")"
+    register_temp_file "$_capped"
+    jq -rcs \
+      --argjson cap "$DREAM_SYNTHESIS_CAP" \
+      'group_by(.lens // "unknown") as $gs
+       | ($gs | length) as $nl
+       | ($cap / (if $nl > 0 then $nl else 1 end) | ceil) as $per
+       | [ $gs[] | sort_by(-(.confidence // 0.7)) | .[:$per] | .[] ]
+       | sort_by(-(.confidence // 0.7))
+       | .[:$cap]
+       | .[]' "$CANDIDATES_FILE" > "$_capped"
+    log "stage=synthesis event=capped_lens_balanced total=$_cap_total cap=$DREAM_SYNTHESIS_CAP"
+    _base_input="$_capped"
+  fi
+
   # Per introspector proposal #2: предотвратить «шум в синтезе» — взять только
   # топ-N кандидатов по confidence. При меньшем объёме — все.
   local _total _candidates_for_prompt
-  _total=$(wc -l < "$CANDIDATES_FILE" 2>/dev/null || echo 0)
+  _total=$(wc -l < "$_base_input" 2>/dev/null || echo 0)
   if (( _total > DREAM_SYNTH_TOP_N )); then
     _candidates_for_prompt="$DREAM_OUT_DIR/.candidates-top.jsonl"
     register_temp_file "$_candidates_for_prompt"
     jq -s -c --argjson n "$DREAM_SYNTH_TOP_N" \
-      'sort_by(-(.confidence // 0.7)) | .[:$n] | .[]' "$CANDIDATES_FILE" \
+      'sort_by(-(.confidence // 0.7)) | .[:$n] | .[]' "$_base_input" \
       > "$_candidates_for_prompt"
     log "stage=synthesis event=pruned_for_synth total=$_total kept=$DREAM_SYNTH_TOP_N"
   else
-    _candidates_for_prompt="$CANDIDATES_FILE"
+    _candidates_for_prompt="$_base_input"
   fi
 
   {
