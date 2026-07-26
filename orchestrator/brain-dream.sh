@@ -1605,6 +1605,16 @@ _jaccard_score() {
     }'
 }
 
+# Существует ли id как реальная Brain-нода (грепом по frontmatter всех
+# доменов) — LLM-кандидаты в relates-to не проверены ни с чем, без этой
+# проверки в граф молча падали ссылки на несуществующие/перепутанные id.
+_dream_node_exists() {
+  local id="$1"
+  # Не фиксируем глубину (nodes/<type>/*.md обычно, но есть и nodes/*.md
+  # напрямую) — рекурсивный grep по всему vault-дереву надёжнее жёсткого glob.
+  grep -qrE "^id: ${id}\$" --include='*.md' "$HOME/brain" 2>/dev/null
+}
+
 # Достать source_ids из frontmatter существующей dream-ноды (поле relates-to
 # через python-yaml или простой grep).
 _extract_relates_to_from_dream() {
@@ -1668,6 +1678,33 @@ write_dream_node() {
     'sort_by(-(.confidence // 0.7)) | .[:10] | [.[].content_hash // empty]' \
     "$CANDIDATES_FILE" 2>/dev/null || echo '[]')
 
+  # Плоский список {rel, to} — формат, который читает граф Brain
+  # (links: {relates-to: [...]} не список → _links_for()/brain_validate его
+  # не видят вообще, рёбра были декоративными). Каждый id проверяется через
+  # _dream_node_exists — LLM-кандидаты не гарантированно существуют.
+  local links_block="" dropped=0 src_id
+  while IFS= read -r src_id; do
+    [[ -z "$src_id" ]] && continue
+    if _dream_node_exists "$src_id"; then
+      links_block+="  - {rel: relates-to, to: '${src_id//\'/\'\'}'}"$'\n'
+    else
+      dropped=$((dropped + 1))
+    fi
+  done < <(printf '%s' "$relates_to_json" | jq -r '.[]' 2>/dev/null)
+  if [[ -n "$continues_in_id" ]]; then
+    if _dream_node_exists "$continues_in_id"; then
+      links_block+="  - {rel: continues-in, to: '${continues_in_id//\'/\'\'}'}   # jaccard=$jaccard threshold=${DREAM_CONTINUES_JACCARD:-0.3}"$'\n'
+    else
+      dropped=$((dropped + 1))
+    fi
+  fi
+  local links_yaml
+  if [[ -n "$links_block" ]]; then
+    links_yaml=$'links:\n'"$links_block"
+  else
+    links_yaml=$'links: []\n'
+  fi
+
   {
     printf -- '---\n'
     printf -- 'id: dream:%s\n' "$UTC_DATE"
@@ -1687,25 +1724,12 @@ write_dream_node() {
     printf -- 'sonnet_ref_api_cost_usd: %s  # справочная API-цена; через подписку не списывается\n' "$(spent_usd_sonnet)"
     printf -- 'candidate_count: %s\n' "$(candidate_count)"
     printf -- 'top_insight_hashes: %s\n' "$top_hashes_json"
-
-    # Структурированные рёбра вместо links: [].
-    printf -- 'links:\n'
-    printf -- '  relates-to:\n'
-    printf '%s' "$relates_to_json" | jq -r '.[]' 2>/dev/null | while IFS= read -r src_id; do
-      [[ -z "$src_id" ]] && continue
-      printf -- "    - '%s'\n" "${src_id//\'/\'\'}"
-    done
-    if [[ -n "$continues_in_id" ]]; then
-      printf -- '  continues-in:\n'
-      printf -- "    - '%s'   # jaccard=%s threshold=%s\n" \
-        "$continues_in_id" "$jaccard" "${DREAM_CONTINUES_JACCARD:-0.3}"
-    fi
-
+    printf -- '%s' "$links_yaml"
     printf -- 'tags: [dream, synthesis]\n'
     printf -- '---\n\n'
     printf '%s\n\n' "$synthesis_text"
   } > "$node_file"
-  log "stage=node event=written file=$node_file relates_to_count=$(printf '%s' "$relates_to_json" | jq 'length')"
+  log "stage=node event=written file=$node_file relates_to_count=$(printf '%s' "$relates_to_json" | jq 'length') dropped_missing=$dropped"
 
   if git -C "$DREAM_NODE_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git -C "$DREAM_NODE_ROOT" add "$node_file" >/dev/null 2>&1 || true
