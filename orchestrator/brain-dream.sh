@@ -181,6 +181,13 @@ DREAM_NODE_ROOT="${DREAM_NODE_ROOT:-$HOME/brain/dreams}"
 # обложка + media-group инсайтов).
 DREAM_TG_MODE="${DREAM_TG_MODE:-legacy}"
 
+# Ночная отправка TG-дайджеста (обложка + топ-10 в подписи + отдельное
+# сообщение с кнопками фидбэка). Раньше публиковалось в Telegram каждую ночь;
+# теперь дайджест показывается в разделе «Сон» дашборда session-manager, а
+# кнопки фидбэка дёргают dream-feedback.sh по SSH вместо Telegram callback-кнопок.
+# 1 = вернуть старую отправку в Telegram (legacy/debug escape hatch).
+DREAM_TG_DIGEST="${DREAM_TG_DIGEST:-0}"
+
 # Интерактивная оценка инсайтов кнопками в Telegram. >0 = после дайджеста (режим
 # single) шлём отдельное сообщение с топ-N кандидатов и сеткой кнопок 👍/➕/👎.
 # Нажатие обрабатывает digest-bot (handlers/dream.py) → dream-feedback.sh.
@@ -2364,25 +2371,27 @@ main() {
     notion_url="$(publish_dream_and_get_url || true)"
   fi
 
-  if [[ "$DREAM_TG_MODE" == "single" ]]; then
-    # Одно сообщение: обложка (cover-only) + топ-10 в подписи. Без картинок
-    # по инсайтам.
-    local cover_url caption
-    cover_url="$(DREAM_IMAGES_MODE=cover-only bash "$ORCHESTRATOR_DIR/dream-images.sh" "$OUT_MD" 2>/dev/null | tail -n 1)"
-    caption="$(telegram_caption_single)"
-    if [[ -n "$cover_url" && "$cover_url" == http* ]]; then
-      send_telegram_photo_url "$cover_url" "$caption"
+  if [[ "$DREAM_TG_DIGEST" == "1" ]]; then
+    if [[ "$DREAM_TG_MODE" == "single" ]]; then
+      # Одно сообщение: обложка (cover-only) + топ-10 в подписи. Без картинок
+      # по инсайтам.
+      local cover_url caption
+      cover_url="$(DREAM_IMAGES_MODE=cover-only bash "$ORCHESTRATOR_DIR/dream-images.sh" "$OUT_MD" 2>/dev/null | tail -n 1)"
+      caption="$(telegram_caption_single)"
+      if [[ -n "$cover_url" && "$cover_url" == http* ]]; then
+        send_telegram_photo_url "$cover_url" "$caption"
+      else
+        send_telegram_message "$caption"
+      fi
+      send_feedback_buttons "$notion_url"
     else
-      send_telegram_message "$caption"
+      summary_text="$(telegram_summary_text)"
+      send_telegram_message "$summary_text"
+      (
+        set +e
+        bash "$ORCHESTRATOR_DIR/dream-images.sh" "$OUT_MD"
+      ) || true
     fi
-    send_feedback_buttons "$notion_url"
-  else
-    summary_text="$(telegram_summary_text)"
-    send_telegram_message "$summary_text"
-    (
-      set +e
-      bash "$ORCHESTRATOR_DIR/dream-images.sh" "$OUT_MD"
-    ) || true
   fi
 
   log "stage=done gemini_launched=$GEMINI_LAUNCHED gemini_spent=\$$(spent_usd) sonnet_launched=$SONNET_LAUNCHED sonnet_session_share=$(sonnet_session_share_pct)% candidates=$count output=$OUT_MD"
