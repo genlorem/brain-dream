@@ -1,0 +1,4 @@
+Техническое пояснение, которое парсер должен отбросить.
+```
+[{"hypothesisId":"err-gap","verdict":"config-tune","target":"coverage threshold","rationale":"Высокий impact, низкие cost и risk, полный rollback.","bestCandidate":null},{"hypothesisId":"idea-links","verdict":"reject","target":"нет безопасного кандидата","rationale":"Риск выше ожидаемой пользы.","bestCandidate":null}]
+```

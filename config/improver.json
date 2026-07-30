@@ -1,0 +1,28 @@
+{
+  "enabled": true,
+  "autoMerge": false,
+  "maxHypotheses": 6,
+  "github": {
+    "minStars": 5,
+    "maxAgeDays": 365,
+    "perQuery": 10
+  },
+  "paths": {
+    "effectiveness": "~/.claude/analytics/brain-effectiveness.ndjson",
+    "nudgeTuner": "~/.claude/analytics/brain-nudge-tuner.ndjson",
+    "coverageTuner": "~/.claude/analytics/brain-coverage-tuner.ndjson",
+    "outcome": "~/.claude/analytics/brain-tuner-outcome.ndjson",
+    "seen": "~/brain/improver/_seen.jsonl",
+    "ledger": "~/brain/improver/improver-ledger.ndjson",
+    "reportsDir": "~/brain/improver/reports"
+  },
+  "keywordSeeds": [
+    "memory graph",
+    "llm judge hook",
+    "claude code hooks",
+    "knowledge graph auto linking",
+    "rag coverage",
+    "self tuning config",
+    "second brain"
+  ]
+}

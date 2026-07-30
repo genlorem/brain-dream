@@ -1,0 +1,4 @@
+служебная строка
+```json
+[{"id":"err-gap","kind":"error","signal":"coverage-judge-gap-x","hypothesis":"Проверить `$HOME` и `hook` без интерполяции","keywords":["memory graph"]},{"id":"idea-links","kind":"idea","signal":null,"hypothesis":"Добавить обратимые предложения связей","keywords":["knowledge graph auto linking"]}]
+```

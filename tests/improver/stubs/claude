@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+prompt_tmp="$(mktemp "${TMPDIR:-/tmp}/claude-stub-prompt.XXXXXX")"
+trap 'rm -f "$prompt_tmp"' EXIT
+command cat >"$prompt_tmp"
+
+if [[ -n "${CLAUDE_ARGS_FILE:-}" ]]; then
+  printf '%s\n' "$*" >"$CLAUDE_ARGS_FILE"
+fi
+if [[ -n "${CLAUDE_PROMPT_FILE:-}" ]]; then
+  command cp "$prompt_tmp" "$CLAUDE_PROMPT_FILE"
+fi
+
+if [[ -n "${CLAUDE_STUB_RESPONSE:-}" ]]; then
+  command cat "$CLAUDE_STUB_RESPONSE"
+elif command grep -q 'GitHub-кандидаты:' "$prompt_tmp"; then
+  command cat "${CLAUDE_STUB_EVALUATE_RESPONSE:?CLAUDE_STUB_EVALUATE_RESPONSE is required}"
+else
+  command cat "${CLAUDE_STUB_HYPOTHESIZE_RESPONSE:?CLAUDE_STUB_HYPOTHESIZE_RESPONSE is required}"
+fi

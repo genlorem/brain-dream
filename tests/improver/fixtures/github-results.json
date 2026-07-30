@@ -1,0 +1,47 @@
+[
+  {
+    "fullName": "example/good",
+    "stargazersCount": 50,
+    "pushedAt": "2026-06-01T00:00:00Z",
+    "url": "https://github.com/example/good",
+    "description": "Свежий пригодный проект",
+    "isArchived": false,
+    "license": {"key": "mit"}
+  },
+  {
+    "fullName": "example/low",
+    "stargazersCount": 2,
+    "pushedAt": "2026-07-01T00:00:00Z",
+    "url": "https://github.com/example/low",
+    "description": "Мало звёзд",
+    "isArchived": false,
+    "license": {"key": "mit"}
+  },
+  {
+    "fullName": "example/archived",
+    "stargazersCount": 1000,
+    "pushedAt": "2026-07-01T00:00:00Z",
+    "url": "https://github.com/example/archived",
+    "description": "Архив",
+    "isArchived": true,
+    "license": {"key": "apache-2.0"}
+  },
+  {
+    "fullName": "example/stale",
+    "stargazersCount": 50,
+    "pushedAt": "2020-01-01T00:00:00Z",
+    "url": "https://github.com/example/stale",
+    "description": "Устарел",
+    "isArchived": false,
+    "license": {"key": "mit"}
+  },
+  {
+    "fullName": "example/reference",
+    "stargazersCount": 200,
+    "pushedAt": "2020-01-01T00:00:00Z",
+    "url": "https://github.com/example/reference",
+    "description": "Старый популярный reference",
+    "isArchived": false,
+    "license": {"key": "bsd-3-clause"}
+  }
+]
