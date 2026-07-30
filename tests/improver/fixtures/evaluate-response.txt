@@ -1,4 +1,4 @@
 Техническое пояснение, которое парсер должен отбросить.
 ```
-[{"hypothesisId":"err-gap","verdict":"config-tune","target":"coverage threshold","rationale":"Высокий impact, низкие cost и risk, полный rollback.","bestCandidate":null},{"hypothesisId":"idea-links","verdict":"reject","target":"нет безопасного кандидата","rationale":"Риск выше ожидаемой пользы.","bestCandidate":null}]
+[{"hypothesisId":"err-gap","verdict":"config-tune","integrationCost":"S","target":"coverage threshold","rationale":"Высокий impact, низкие cost и risk, полный rollback.","bestCandidate":null},{"hypothesisId":"idea-links","verdict":"integrate","integrationCost":"L","target":"миграция Brain на PostgreSQL","rationale":"Полная смена хранилища ради dense memory.","bestCandidate":{"fullName":"example/good","url":"https://github.com/example/good"}}]
 ```

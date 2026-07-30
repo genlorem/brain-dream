@@ -80,7 +80,9 @@ def test_aggregate(tmp: Path) -> None:
 
 
 def test_github_search(tmp: Path) -> None:
-    config = write_config(tmp)
+    config = write_config(
+        tmp, github={"minStars": 5, "maxAgeDays": 365, "perQuery": 2}
+    )
     hypotheses = tmp / "hypotheses.json"
     hypotheses.write_text(
         json.dumps(
@@ -91,6 +93,8 @@ def test_github_search(tmp: Path) -> None:
                     "signal": None,
                     "hypothesis": "test",
                     "keywords": ["memory graph", "second brain"],
+                    "domainTerms": ["memory", "knowledge graph", "second brain"],
+                    "negativeTerms": ["backup", "restic", "network", "pentest"],
                 }
             ]
         ),
@@ -109,7 +113,9 @@ def test_github_search(tmp: Path) -> None:
     )
     rows = json.loads(first.stdout)
     names = [row["fullName"] for row in rows[0]["candidates"]]
-    assert names == ["example/reference", "example/good"], rows
+    assert names == ["example/graph-memory-pro", "example/reference"], rows
+    assert len(names) == 2
+    assert not any(name.startswith("noise/") for name in names)
     seen_lines = (tmp / "_seen.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(seen_lines) == 2
 
@@ -121,9 +127,35 @@ def test_github_search(tmp: Path) -> None:
         env=env,
     )
     repeated = json.loads(second.stdout)
-    assert repeated == [{"hypothesisId": "h1", "candidates": []}], repeated
+    repeated_names = [row["fullName"] for row in repeated[0]["candidates"]]
+    assert repeated_names == ["example/good", "example/second-brain"], repeated
+    assert set(names).isdisjoint(repeated_names)
     seen = [json.loads(line) for line in (tmp / "_seen.jsonl").read_text().splitlines()]
     assert {row["last_seen"] for row in seen} == {"2026-07-31"}
+
+    # Старый формат без domainTerms/negativeTerms остаётся рабочим и не включает gate.
+    legacy_tmp = tmp / "legacy"
+    legacy_tmp.mkdir()
+    legacy_config = write_config(
+        legacy_tmp, github={"minStars": 5, "maxAgeDays": 365, "perQuery": 5}
+    )
+    legacy_hypotheses = legacy_tmp / "hypotheses.json"
+    legacy_hypotheses.write_text(
+        '[{"id":"legacy","keywords":["memory graph"]}]', encoding="utf-8"
+    )
+    legacy = run(
+        ROOT / "tools" / "improver-github-search.sh",
+        legacy_hypotheses,
+        "2026-07-30",
+        legacy_config,
+        env=env,
+    )
+    legacy_names = [
+        row["fullName"] for row in json.loads(legacy.stdout)[0]["candidates"]
+    ]
+    assert len(legacy_names) == 5
+    assert "noise/restic-memory" in legacy_names
+    assert "noise/network-graph" in legacy_names
 
 
 def test_llm_wrappers(tmp: Path) -> None:
@@ -156,11 +188,31 @@ def test_llm_wrappers(tmp: Path) -> None:
     )
     prompt = prompt_file.read_text(encoding="utf-8")
     assert "`$HOME`" in prompt and "цитата" in prompt
+    assert "2–4 КОНКРЕТНЫХ многословных" in prompt
+    assert "domainTerms" in prompt and "negativeTerms" in prompt
+    assert all(row.get("domainTerms") for row in hypotheses)
 
     hypotheses_path = tmp / "llm-hypotheses.json"
     candidates_path = tmp / "llm-candidates.json"
     hypotheses_path.write_text(json.dumps(hypotheses, ensure_ascii=False), encoding="utf-8")
-    candidates_path.write_text("[]", encoding="utf-8")
+    candidates_path.write_text(
+        json.dumps(
+            [
+                {
+                    "hypothesisId": row["id"],
+                    "candidates": [
+                        {
+                            "fullName": "example/good",
+                            "url": "https://github.com/example/good",
+                            "description": "LLM memory knowledge graph",
+                        }
+                    ],
+                }
+                for row in hypotheses
+            ]
+        ),
+        encoding="utf-8",
+    )
     eval_env = dict(common_env)
     eval_env["CLAUDE_STUB_RESPONSE"] = str(FIXTURES / "evaluate-response.txt")
     evaluated = run(
@@ -171,6 +223,26 @@ def test_llm_wrappers(tmp: Path) -> None:
     )
     verdicts = json.loads(evaluated.stdout)
     assert [row["verdict"] for row in verdicts] == ["config-tune", "reject"]
+    assert [row["integrationCost"] for row in verdicts] == ["S", "L"]
+    assert verdicts[1]["bestCandidate"] is None
+    eval_prompt = prompt_file.read_text(encoding="utf-8")
+    assert "integrationCost S или M" in eval_prompt
+    assert "нет релевантных готовых решений" in eval_prompt
+
+    # Пустая выдача принудительно даёт reject, даже если стаб предлагает иное.
+    candidates_path.write_text("[]", encoding="utf-8")
+    no_candidates = run(
+        ROOT / "tools" / "improver-evaluate.sh",
+        hypotheses_path,
+        candidates_path,
+        env=eval_env,
+    )
+    empty_verdicts = json.loads(no_candidates.stdout)
+    assert all(row["verdict"] == "reject" for row in empty_verdicts)
+    assert all(
+        row["rationale"] == "нет релевантных готовых решений"
+        for row in empty_verdicts
+    )
 
 
 def test_report_and_ledger(tmp: Path) -> None:

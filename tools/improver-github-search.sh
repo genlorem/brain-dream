@@ -84,7 +84,7 @@ try:
     paths = config.get("paths", {})
     min_stars = int(github.get("minStars", 5))
     max_age = int(github.get("maxAgeDays", 365))
-    per_query = int(github.get("perQuery", 10))
+    per_query = max(0, int(github.get("perQuery", 5)))
     seen_path = Path(
         os.path.expanduser(os.environ.get("IMPROVER_SEEN_PATH", paths.get("seen", "")))
     )
@@ -104,6 +104,22 @@ try:
         keywords = hypothesis.get("keywords", [])
         if isinstance(keywords, str):
             keywords = [keywords]
+        domain_terms = hypothesis.get("domainTerms", [])
+        if isinstance(domain_terms, str):
+            domain_terms = [domain_terms]
+        domain_terms = [
+            str(value).strip().lower()
+            for value in domain_terms
+            if str(value).strip()
+        ]
+        negative_terms = hypothesis.get("negativeTerms", [])
+        if isinstance(negative_terms, str):
+            negative_terms = [negative_terms]
+        negative_terms = [
+            str(value).strip().lower()
+            for value in negative_terms
+            if str(value).strip()
+        ]
         for keyword in keywords:
             query = str(keyword).strip()
             if not query:
@@ -141,26 +157,36 @@ try:
                 url = str(row.get("url", "")).strip()
                 if not url:
                     continue
-                if url in seen:
-                    seen[url]["last_seen"] = run_date.isoformat()
-                else:
-                    seen[url] = {
-                        "url": url,
-                        "first_seen": run_date.isoformat(),
-                        "last_seen": run_date.isoformat(),
-                    }
-                if url in known_before or url in emitted_this_run:
+                full_name = str(row.get("fullName", ""))
+                description = str(row.get("description") or "")
+                searchable = f"{full_name} {description}".lower()
+                if any(term in searchable for term in negative_terms):
                     continue
-                emitted_this_run.add(url)
+                if domain_terms and not any(term in searchable for term in domain_terms):
+                    continue
+                if url in known_before:
+                    seen[url]["last_seen"] = run_date.isoformat()
+                    continue
+                if url in emitted_this_run:
+                    continue
                 candidates[url] = {
-                    "fullName": str(row.get("fullName", "")),
+                    "fullName": full_name,
                     "url": url,
                     "stars": stars,
                     "pushedAt": str(row.get("pushedAt", "")),
                     "license": license_name(row.get("license")),
-                    "description": str(row.get("description") or ""),
+                    "description": description,
                 }
         ordered = sorted(candidates.values(), key=lambda row: (-row["stars"], row["url"]))
+        ordered = ordered[:per_query]
+        for candidate in ordered:
+            url = candidate["url"]
+            emitted_this_run.add(url)
+            seen[url] = {
+                "url": url,
+                "first_seen": run_date.isoformat(),
+                "last_seen": run_date.isoformat(),
+            }
         output.append({"hypothesisId": str(hypothesis["id"]), "candidates": ordered})
 
     save_seen(seen_path, seen)

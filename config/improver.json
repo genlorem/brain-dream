@@ -5,7 +5,7 @@
   "github": {
     "minStars": 5,
     "maxAgeDays": 365,
-    "perQuery": 10
+    "perQuery": 5
   },
   "paths": {
     "effectiveness": "~/.claude/analytics/brain-effectiveness.ndjson",

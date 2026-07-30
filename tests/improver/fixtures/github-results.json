@@ -1,10 +1,73 @@
 [
   {
+    "fullName": "noise/restic-memory",
+    "stargazersCount": 10000,
+    "pushedAt": "2026-07-01T00:00:00Z",
+    "url": "https://github.com/noise/restic-memory",
+    "description": "Backup dedup with a memory graph index",
+    "isArchived": false,
+    "license": {"key": "bsd-2-clause"}
+  },
+  {
+    "fullName": "noise/network-graph",
+    "stargazersCount": 9000,
+    "pushedAt": "2026-07-01T00:00:00Z",
+    "url": "https://github.com/noise/network-graph",
+    "description": "Pentest network knowledge graph",
+    "isArchived": false,
+    "license": {"key": "gpl-3.0"}
+  },
+  {
+    "fullName": "noise/unrelated",
+    "stargazersCount": 8000,
+    "pushedAt": "2026-07-01T00:00:00Z",
+    "url": "https://github.com/noise/unrelated",
+    "description": "Generic observability dashboard",
+    "isArchived": false,
+    "license": {"key": "mit"}
+  },
+  {
+    "fullName": "example/graph-memory-pro",
+    "stargazersCount": 500,
+    "pushedAt": "2026-07-01T00:00:00Z",
+    "url": "https://github.com/example/graph-memory-pro",
+    "description": "Knowledge graph and LLM memory linking",
+    "isArchived": false,
+    "license": {"key": "apache-2.0"}
+  },
+  {
+    "fullName": "example/reference",
+    "stargazersCount": 200,
+    "pushedAt": "2020-01-01T00:00:00Z",
+    "url": "https://github.com/example/reference",
+    "description": "Старый популярный knowledge graph reference",
+    "isArchived": false,
+    "license": {"key": "bsd-3-clause"}
+  },
+  {
     "fullName": "example/good",
     "stargazersCount": 50,
     "pushedAt": "2026-06-01T00:00:00Z",
     "url": "https://github.com/example/good",
-    "description": "Свежий пригодный проект",
+    "description": "Свежий LLM memory graph для второго мозга",
+    "isArchived": false,
+    "license": {"key": "mit"}
+  },
+  {
+    "fullName": "example/second-brain",
+    "stargazersCount": 40,
+    "pushedAt": "2026-06-01T00:00:00Z",
+    "url": "https://github.com/example/second-brain",
+    "description": "Second brain knowledge graph",
+    "isArchived": false,
+    "license": {"key": "mit"}
+  },
+  {
+    "fullName": "example/memory-links",
+    "stargazersCount": 30,
+    "pushedAt": "2026-06-01T00:00:00Z",
+    "url": "https://github.com/example/memory-links",
+    "description": "Memory linking toolkit",
     "isArchived": false,
     "license": {"key": "mit"}
   },
@@ -13,7 +76,7 @@
     "stargazersCount": 2,
     "pushedAt": "2026-07-01T00:00:00Z",
     "url": "https://github.com/example/low",
-    "description": "Мало звёзд",
+    "description": "Knowledge graph with too few stars",
     "isArchived": false,
     "license": {"key": "mit"}
   },
@@ -22,7 +85,7 @@
     "stargazersCount": 1000,
     "pushedAt": "2026-07-01T00:00:00Z",
     "url": "https://github.com/example/archived",
-    "description": "Архив",
+    "description": "Archived knowledge graph",
     "isArchived": true,
     "license": {"key": "apache-2.0"}
   },
@@ -31,17 +94,8 @@
     "stargazersCount": 50,
     "pushedAt": "2020-01-01T00:00:00Z",
     "url": "https://github.com/example/stale",
-    "description": "Устарел",
+    "description": "Stale memory graph",
     "isArchived": false,
     "license": {"key": "mit"}
-  },
-  {
-    "fullName": "example/reference",
-    "stargazersCount": 200,
-    "pushedAt": "2020-01-01T00:00:00Z",
-    "url": "https://github.com/example/reference",
-    "description": "Старый популярный reference",
-    "isArchived": false,
-    "license": {"key": "bsd-3-clause"}
   }
 ]

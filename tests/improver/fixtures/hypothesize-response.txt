@@ -1,4 +1,4 @@
 служебная строка
 ```json
-[{"id":"err-gap","kind":"error","signal":"coverage-judge-gap-x","hypothesis":"Проверить `$HOME` и `hook` без интерполяции","keywords":["memory graph"]},{"id":"idea-links","kind":"idea","signal":null,"hypothesis":"Добавить обратимые предложения связей","keywords":["knowledge graph auto linking"]}]
+[{"id":"err-gap","kind":"error","signal":"coverage-judge-gap-x","hypothesis":"Проверить `$HOME` и `hook` без интерполяции","keywords":["llm memory graph","second brain memory"],"domainTerms":["memory","graph","brain"],"negativeTerms":["backup","restic","network","pentest","downloader"]},{"id":"idea-links","kind":"idea","signal":null,"hypothesis":"Добавить обратимые предложения связей","keywords":["knowledge graph auto linking","second brain linking"],"domainTerms":["knowledge graph","memory linking"],"negativeTerms":["network","pentest","backup","anki"]}]
 ```

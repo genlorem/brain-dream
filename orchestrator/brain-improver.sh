@@ -121,7 +121,7 @@ try:
         keywords = row.get("keywords", [])
         if isinstance(keywords, str):
             keywords = [keywords]
-        row["keywords"] = [str(value) for value in keywords if str(value).strip()][:3]
+        row["keywords"] = [str(value) for value in keywords if str(value).strip()][:4]
         selected.append(row)
         current_ids.add(hid)
         if len(selected) >= maximum:
