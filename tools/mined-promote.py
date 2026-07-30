@@ -159,7 +159,8 @@ def scan_candidates(
     blocked = terminal_decisions(state_path)
     split = parser or frontmatter_parser()
     candidates: list[Candidate] = []
-    for path in sorted((dreams_root / "nodes").glob("*.md")):
+    # рекурсивно: движок раскладывает ноды по типовым подпапкам (nodes/notes/...)
+    for path in sorted((dreams_root / "nodes").glob("**/*.md")):
         try:
             frontmatter, body = split(path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001 — одна битая нода не останавливает акт
