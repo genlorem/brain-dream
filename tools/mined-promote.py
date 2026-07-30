@@ -392,14 +392,22 @@ def judge_candidate(
 
 
 def promoted_node_id(candidate_id: str, node_type: str) -> str:
-    """Сохранить хвост mined-хэша, сменив тип ноды."""
+    """Сохранить хвост mined-хэша, сменив тип ноды.
+
+    Датный сегмент отбрасывается: иначе promoted-id типа note совпал бы
+    с candidate-id один-в-один — коллизия id между vault'ами (shadowing).
+    """
     tail = candidate_id.rsplit(":", 1)[-1]
     if tail.startswith("mined-"):
         tail = tail[len("mined-"):]
+    tail = re.sub(r"^\d{8}-", "", tail)
     tail = re.sub(r"[^a-zA-Z0-9_-]", "-", tail).strip("-")
     if not tail:
         raise ValueError("candidate id has no hash tail")
-    return f"{node_type}:mined-{tail}"
+    node_id = f"{node_type}:mined-{tail}"
+    if node_id == candidate_id:
+        raise ValueError("promoted id would collide with candidate id")
+    return node_id
 
 
 def promoted_body(
@@ -642,6 +650,22 @@ def kill_switch_path() -> Path:
     return Path.home() / ".brain-dream" / "mined-promote-disabled"
 
 
+def resolve_judge_cmd() -> list[str]:
+    """env-override судьи: PROMOTE_JUDGE_CMD, иначе GROOM_JUDGE_CMD (общесемейный),
+    иначе дефолтный gemini. Формат — JSON-массив argv с "{PROMPT}"."""
+    for env_name in ("PROMOTE_JUDGE_CMD", "GROOM_JUDGE_CMD"):
+        raw = os.environ.get(env_name)
+        if not raw:
+            continue
+        try:
+            cmd = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(cmd, list) and cmd and all(isinstance(i, str) for i in cmd):
+            return cmd
+    return list(DEFAULT_JUDGE_CMD)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group()
@@ -668,6 +692,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             min_conf=args.min_conf,
             max_promote=args.max_promote,
             judge_timeout=args.judge_timeout,
+            judge_cmd=resolve_judge_cmd(),
         )
     except Exception as error:  # noqa: BLE001 — CLI возвращает контрактный exit 1
         print(
