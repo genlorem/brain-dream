@@ -389,9 +389,22 @@ def triage_prompt(pair: Pair, vault) -> str:
     )
 
 
+def extract_json_object(text: str) -> str:
+    """Вырезать первый JSON-объект из вывода LLM.
+
+    CLI-судьи (claude -p, gemini) оборачивают JSON в ```-фенсы и/или
+    сопровождают текстом — голый json.loads на весь stdout не работает.
+    """
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in judge output")
+    return text[start:end + 1]
+
+
 def parse_triage_decision(raw: object, pair: Pair) -> TriageDecision:
     """Проверить строгий JSON-контракт triage-судьи."""
-    data = raw if isinstance(raw, dict) else json.loads(str(raw))
+    data = raw if isinstance(raw, dict) else json.loads(extract_json_object(str(raw)))
     if not isinstance(data, dict):
         raise ValueError("judge output is not an object")
     verdict = data.get("verdict")
@@ -717,6 +730,25 @@ def kill_switch_path() -> Path:
     return Path.home() / ".brain-dream" / "dream-groom-disabled"
 
 
+def resolve_judge_cmd() -> list[str]:
+    """env GROOM_JUDGE_CMD (JSON-массив argv) переопределяет судью по умолчанию.
+
+    Нужен как fallback: дефолтный gemini делит дневную free-tier-квоту с ночными
+    снами и может быть исчерпан (TerminalQuotaError) — тогда судьёй ставится,
+    например, ["claude","-p","{PROMPT}","--model","claude-haiku-4-5-20251001"].
+    """
+    raw = os.environ.get("GROOM_JUDGE_CMD")
+    if not raw:
+        return list(DEFAULT_JUDGE_CMD)
+    try:
+        cmd = json.loads(raw)
+    except ValueError:
+        return list(DEFAULT_JUDGE_CMD)
+    if isinstance(cmd, list) and cmd and all(isinstance(item, str) for item in cmd):
+        return cmd
+    return list(DEFAULT_JUDGE_CMD)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
@@ -757,6 +789,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             triage_conf=args.triage_conf,
             max_triage=args.max_triage,
             judge_timeout=args.judge_timeout,
+            judge_cmd=resolve_judge_cmd(),
         )
     except Exception as error:  # noqa: BLE001 — CLI возвращает контрактный exit 1
         print(

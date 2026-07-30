@@ -308,9 +308,22 @@ def promotion_prompt(
     )
 
 
+def extract_json_object(text: str) -> str:
+    """Вырезать первый JSON-объект из вывода LLM.
+
+    CLI-судьи (claude -p, gemini) оборачивают JSON в ```-фенсы и/или
+    сопровождают текстом — голый json.loads на весь stdout не работает.
+    """
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in judge output")
+    return text[start:end + 1]
+
+
 def parse_promotion_decision(raw: object) -> PromotionDecision:
     """Проверить полный JSON-контракт судьи."""
-    data = raw if isinstance(raw, dict) else json.loads(str(raw))
+    data = raw if isinstance(raw, dict) else json.loads(extract_json_object(str(raw)))
     if not isinstance(data, dict):
         raise ValueError("judge output is not an object")
     action = data.get("action")
