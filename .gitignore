@@ -30,3 +30,6 @@ config/*.local.env
 # Тестовые артефакты
 /tmp/
 tests/snapshots/
+
+# Tier-2 improver: рантайм-выхлоп (отчёты/proposals/леджер регенерятся каждый прогон)
+proposals/improver/
