@@ -499,6 +499,7 @@ def run_promote(
     *,
     apply: bool = False,
     min_conf: float = 0.85,
+    drop_conf: float = 0.9,
     max_promote: int = 5,
     judge_timeout: int = 45,
     judge_cmd: Sequence[str] = DEFAULT_JUDGE_CMD,
@@ -615,6 +616,23 @@ def run_promote(
             append_state(state_path, candidate.id, "promote", timestamp, new_id)
             promoted.append((candidate.id, new_id, decision, "promoted"))
         elif decision.action == "drop":
+            # drop необратим (state-лог блокирует пересуд), поэтому требует
+            # уверенности выше drop_conf; ниже — обратимый defer. Ловит
+            # флип-флоп судьи на пограничных фактах.
+            if decision.confidence < drop_conf:
+                demoted = PromotionDecision(
+                    "defer",
+                    decision.domain,
+                    decision.node_type,
+                    decision.title,
+                    decision.links,
+                    decision.confidence,
+                    f"drop ниже порога {drop_conf:.2f} — отложено",
+                )
+                if apply:
+                    append_state(state_path, candidate.id, "defer", timestamp, None)
+                deferred.append((candidate.id, demoted))
+                continue
             if apply:
                 append_state(state_path, candidate.id, "drop", timestamp, None)
             dropped.append(
@@ -673,6 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run", dest="apply", action="store_false")
     parser.set_defaults(apply=False)
     parser.add_argument("--min-conf", type=float, default=0.85)
+    parser.add_argument("--drop-conf", type=float, default=0.9)
     parser.add_argument("--max-promote", type=int, default=5)
     parser.add_argument("--judge-timeout", type=int, default=45)
     return parser
@@ -690,6 +709,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             DREAMS,
             apply=args.apply,
             min_conf=args.min_conf,
+            drop_conf=args.drop_conf,
             max_promote=args.max_promote,
             judge_timeout=args.judge_timeout,
             judge_cmd=resolve_judge_cmd(),
