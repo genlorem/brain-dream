@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import struct
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -42,7 +43,9 @@ PAIR_RE = re.compile(r"`(\S+)`\s*<->\s*`(\S+)`")
 # должны оставаться кандидатами при повторном прогоне в тот же день
 # (сценарий «утром dry-run → ревью → --apply»)
 APPLIED_RE = re.compile(r"-\s*\[(?:applied|x)\]\s*`(\S+)`\s*<->\s*`(\S+)`")
+REJECTED_RE = re.compile(r"-\s*\[rejected\]\s*`(\S+)`\s*<->\s*`(\S+)`")
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+DEFAULT_JUDGE_CMD = ["gemini", "-m", "gemini-2.5-flash", "-p", "{PROMPT}"]
 
 
 @dataclass(frozen=True)
@@ -53,10 +56,21 @@ class Pair:
     b: str
     sim: float
     reason: str
+    judge_confidence: float | None = None
 
     @property
     def key(self) -> frozenset[str]:
         return frozenset((self.a, self.b))
+
+
+@dataclass(frozen=True)
+class TriageDecision:
+    """Нормализованный ответ LLM-судьи для одной пары."""
+
+    pair: Pair
+    verdict: str
+    confidence: float
+    reason: str
 
 
 def load_vault():
@@ -206,6 +220,18 @@ def ledger_pairs(
     return result
 
 
+def rejected_pairs(proposals_dir: Path) -> set[frozenset[str]]:
+    """Пары, навсегда отклонённые в любом ledger-файле."""
+    result: set[frozenset[str]] = set()
+    for path in sorted(proposals_dir.glob("*.md")):
+        try:
+            matches = REJECTED_RE.findall(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        result.update(frozenset(pair) for pair in matches)
+    return result
+
+
 def orphan_candidates(
     vault,
     orphans: Sequence[str],
@@ -266,7 +292,11 @@ def collect_candidates(
         report_applied = APPLIED_RE.findall(report_path.read_text(encoding="utf-8"))
     except OSError:
         report_applied = []
-    skip = linked_pairs(vault) | {frozenset(pair) for pair in report_applied}
+    skip = (
+        linked_pairs(vault)
+        | rejected_pairs(proposals_dir)
+        | {frozenset(pair) for pair in report_applied}
+    )
     result: list[Pair] = []
     for pair in candidates:
         if pair.key in skip or len(pair.key) != 2:
@@ -305,6 +335,118 @@ def classify(
     return auto, proposed
 
 
+def subprocess_judge(
+    prompt: str,
+    judge_cmd: Sequence[str] = DEFAULT_JUDGE_CMD,
+    timeout: int = 30,
+) -> str:
+    """Вызвать настроенный LLM argv; разбор ответа остаётся у вызывающего кода."""
+    command = [prompt if item == "{PROMPT}" else item for item in judge_cmd]
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        timeout=timeout,
+        text=True,
+    )
+    if completed.returncode:
+        raise RuntimeError(f"judge exited with status {completed.returncode}")
+    return completed.stdout
+
+
+def _body_without_frontmatter(text: str) -> str:
+    """Убрать простой YAML-frontmatter без импорта движка."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return text
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            return "".join(lines[index + 1:])
+    return text
+
+
+def _node_excerpt(vault, node_id: str) -> str:
+    """Прочитать заголовок и не более 600 символов текста ноды."""
+    node = vault.index[node_id]
+    raw = Path(node.path).read_text(encoding="utf-8")
+    title = str(getattr(node, "title", "")).strip()
+    body = _body_without_frontmatter(raw).strip()
+    return f"Заголовок: {title}\nТело: {body}"[:600]
+
+
+def triage_prompt(pair: Pair, vault) -> str:
+    """Собрать строгий prompt судьи для relates-to пары."""
+    left = _node_excerpt(vault, pair.a)
+    right = _node_excerpt(vault, pair.b)
+    return (
+        "LLM-triage кандидата ребра личного графа знаний.\n\n"
+        f"Нода A ({pair.a}):\n{left}\n\n"
+        f"Нода B ({pair.b}):\n{right}\n\n"
+        f"Similarity: {pair.sim:.4f}\n"
+        "Связаны ли эти две заметки осмысленной связью relates-to в личном "
+        "графе знаний? Ответ строго JSON: "
+        '{"verdict": "link"|"reject"|"defer", "confidence": 0..1, '
+        '"reason": "<до 15 слов>"}'
+    )
+
+
+def parse_triage_decision(raw: object, pair: Pair) -> TriageDecision:
+    """Проверить строгий JSON-контракт triage-судьи."""
+    data = raw if isinstance(raw, dict) else json.loads(str(raw))
+    if not isinstance(data, dict):
+        raise ValueError("judge output is not an object")
+    verdict = data.get("verdict")
+    confidence = data.get("confidence")
+    reason = data.get("reason")
+    if verdict not in {"link", "reject", "defer"}:
+        raise ValueError("invalid verdict")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        raise ValueError("invalid confidence")
+    confidence = float(confidence)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        raise ValueError("invalid confidence")
+    if not isinstance(reason, str):
+        raise ValueError("invalid reason")
+    clean_reason = " ".join(reason.split())
+    return TriageDecision(pair, verdict, confidence, clean_reason)
+
+
+def judge_proposed(
+    proposed: Sequence[Pair],
+    vault,
+    judge: Callable[[str], object],
+    max_triage: int,
+) -> list[TriageDecision]:
+    """Отсудить верхушку propose-пула с fail-open на любой сбой."""
+    decisions: list[TriageDecision] = []
+    for pair in proposed[:max(0, max_triage)]:
+        try:
+            prompt = triage_prompt(pair, vault)
+            decisions.append(parse_triage_decision(judge(prompt), pair))
+        except Exception as error:  # noqa: BLE001 — fail-open является контрактом
+            print(
+                f"graph-groom triage defer {pair.a} <-> {pair.b}: "
+                f"{error.__class__.__name__}: {error}",
+                file=sys.stderr,
+            )
+            decisions.append(
+                TriageDecision(pair, "defer", 0.0, "judge error or invalid output"),
+            )
+    return decisions
+
+
+def pair_evidence(pair: Pair, today: str) -> str:
+    """Evidence различает прежние auto-рёбра и новые LLM-triage рёбра."""
+    if pair.judge_confidence is not None:
+        return (
+            f"dream-groom {today} llm-triage, sim={pair.sim:.2f}, "
+            f"judge={pair.judge_confidence:.2f}"
+        )
+    return (
+        f"dream-groom {today} auto, sim={pair.sim:.2f}, "
+        f"reason={pair.reason}"
+    )
+
+
 def apply_pairs(pairs: Sequence[Pair], today: str) -> None:
     """Создать auto-рёбра через один MCP-сеанс; fastmcp импортируется лениво."""
     from fastmcp import Client
@@ -319,10 +461,7 @@ def apply_pairs(pairs: Sequence[Pair], today: str) -> None:
                         "src_id": pair.a,
                         "rel": "relates-to",
                         "to_id": pair.b,
-                        "evidence": (
-                            f"dream-groom {today} auto, sim={pair.sim:.2f}, "
-                            f"reason={pair.reason}"
-                        ),
+                        "evidence": pair_evidence(pair, today),
                     },
                 )
 
@@ -334,25 +473,40 @@ def append_ledger(
     today: date,
     applied: Sequence[Pair],
     proposed: Sequence[Pair],
+    rejected: Sequence[TriageDecision] = (),
 ) -> None:
-    """Записать применённые auto и новые propose в сегодняшний общий ledger."""
+    """Записать применённые, отклонённые и новые propose в общий ledger."""
     out = proposals_dir / f"{today.isoformat()}.md"
     today_seen = {frozenset(pair) for pair in parse_pairs(out)}
+    try:
+        today_rejected = {
+            frozenset(pair)
+            for pair in REJECTED_RE.findall(out.read_text(encoding="utf-8"))
+        }
+    except OSError:
+        today_rejected = set()
     all_seen = {
         frozenset(pair)
         for pair in ledger_pairs(proposals_dir, today, None)
     }
-    additions: list[tuple[str, Pair]] = []
+    pair_additions: list[tuple[str, Pair]] = []
     for pair in applied:
         if pair.key not in today_seen:
-            additions.append(("x", pair))
+            pair_additions.append(("x", pair))
             today_seen.add(pair.key)
+    reject_additions: list[TriageDecision] = []
+    for decision in rejected:
+        if decision.pair.key not in today_rejected:
+            reject_additions.append(decision)
+            today_rejected.add(decision.pair.key)
+            today_seen.add(decision.pair.key)
+            all_seen.add(decision.pair.key)
     for pair in proposed:
         if pair.key not in all_seen and pair.key not in today_seen:
-            additions.append((" ", pair))
+            pair_additions.append((" ", pair))
             all_seen.add(pair.key)
             today_seen.add(pair.key)
-    if not additions:
+    if not pair_additions and not reject_additions:
         return
     proposals_dir.mkdir(parents=True, exist_ok=True)
     lines = []
@@ -363,10 +517,16 @@ def append_ledger(
             "Источник: dream-groom (embedding-близость, без LLM).",
             "",
         ]
-    for mark, pair in additions:
+    for mark, pair in pair_additions:
         lines.append(
             f"- [{mark}] `{pair.a}` <-> `{pair.b}` — sim {pair.sim:.2f}, "
             f"reason={pair.reason}"
+        )
+    for decision in reject_additions:
+        pair = decision.pair
+        lines.append(
+            f"- [rejected] `{pair.a}` <-> `{pair.b}` — "
+            f"judge={decision.confidence:.2f}, reason={decision.reason}"
         )
     with out.open("a", encoding="utf-8") as stream:
         stream.write("\n".join(lines) + "\n")
@@ -379,6 +539,7 @@ def write_report(
     pending: Sequence[Pair],
     proposed: Sequence[Pair],
     dry_run: bool,
+    triage: Mapping[str, Sequence[TriageDecision]] | None = None,
 ) -> None:
     """Дописать секцию прогона в дневной markdown-отчёт."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -408,6 +569,19 @@ def write_report(
         )
     if not proposed:
         lines.append("_Нет._")
+    if triage is not None:
+        lines += ["", "### Triage", ""]
+        wrote_triage = False
+        for state in ("linked", "rejected", "deferred"):
+            for decision in triage.get(state, ()):
+                pair = decision.pair
+                lines.append(
+                    f"- [{state}] `{pair.a}` <-> `{pair.b}` — "
+                    f"judge={decision.confidence:.2f}, reason={decision.reason}"
+                )
+                wrote_triage = True
+        if not wrote_triage:
+            lines.append("_Нет._")
     with path.open("a", encoding="utf-8") as stream:
         stream.write("\n".join(lines) + "\n")
 
@@ -426,6 +600,12 @@ def run_groom(
     max_links: int = 10,
     top_neighbors: int = 5,
     proposals_days: int = 30,
+    llm_triage: bool = False,
+    triage_conf: float = 0.7,
+    max_triage: int = 25,
+    judge_timeout: int = 30,
+    judge_cmd: Sequence[str] = DEFAULT_JUDGE_CMD,
+    judge: Callable[[str], object] | None = None,
 ) -> dict[str, object]:
     """Выполнить акт с инъекцией vault, векторов и linker для тестов."""
     run_date = today or datetime.now(timezone.utc).date()
@@ -443,23 +623,93 @@ def run_groom(
         max(0, proposals_days),
     )
     auto, proposed = classify(candidates, vault, auto_sim)
-    selected = auto[:max(0, max_links)] if apply else []
-    pending = auto[len(selected):] if apply else auto
+    selected_auto = auto[:max(0, max_links)] if apply else []
+    pending = auto[len(selected_auto):] if apply else auto
+    selected_triage: list[Pair] = []
+    rejected: list[TriageDecision] = []
+    triage_report: dict[str, list[TriageDecision]] | None = None
+
+    if llm_triage:
+        active_judge = judge
+        if active_judge is None:
+            active_judge = lambda prompt: subprocess_judge(
+                prompt,
+                judge_cmd=judge_cmd,
+                timeout=judge_timeout,
+            )
+        decisions = judge_proposed(proposed, vault, active_judge, max_triage)
+        triage_report = {"linked": [], "rejected": [], "deferred": []}
+        link_slots = max(0, max_links - len(selected_auto)) if apply else 0
+        selected_keys: set[frozenset[str]] = set()
+        rejected_keys: set[frozenset[str]] = set()
+        for decision in decisions:
+            if decision.verdict == "reject" and decision.confidence >= triage_conf:
+                rejected.append(decision)
+                rejected_keys.add(decision.pair.key)
+                triage_report["rejected"].append(decision)
+            elif (
+                decision.verdict == "link"
+                and decision.confidence >= triage_conf
+                and len(selected_triage) < link_slots
+            ):
+                pair = Pair(
+                    decision.pair.a,
+                    decision.pair.b,
+                    decision.pair.sim,
+                    decision.pair.reason,
+                    decision.confidence,
+                )
+                selected_triage.append(pair)
+                selected_keys.add(pair.key)
+                triage_report["linked"].append(
+                    TriageDecision(
+                        pair,
+                        decision.verdict,
+                        decision.confidence,
+                        decision.reason,
+                    ),
+                )
+            else:
+                triage_report["deferred"].append(decision)
+        proposed = [
+            pair
+            for pair in proposed
+            if pair.key not in selected_keys and pair.key not in rejected_keys
+        ]
+
+    selected = selected_auto + selected_triage
     if selected:
         active_linker = linker or (
             lambda pairs: apply_pairs(pairs, run_date.isoformat())
         )
         active_linker(selected)
     if apply:
-        append_ledger(proposals_dir, run_date, selected, proposed)
-    write_report(report_path, run_date, selected, pending, proposed, not apply)
-    return {
+        append_ledger(proposals_dir, run_date, selected, proposed, rejected)
+    write_report(
+        report_path,
+        run_date,
+        selected_auto,
+        pending,
+        proposed,
+        not apply,
+        triage=triage_report,
+    )
+    result = {
         "orphans": len(orphans),
-        "auto_applied": len(selected),
+        "auto_applied": len(selected_auto),
         "auto_pending": len(pending),
         "proposed": len(proposed),
         "report": str(report_path),
     }
+    if llm_triage:
+        result.update(
+            {
+                "triage_linked": len(selected_triage),
+                "triage_rejected": len(rejected),
+                "triage_deferred": len(triage_report["deferred"]),
+            },
+        )
+    return result
 
 
 def kill_switch_path() -> Path:
@@ -475,6 +725,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-links", type=int, default=10)
     parser.add_argument("--top-neighbors", type=int, default=5)
     parser.add_argument("--proposals-days", type=int, default=30)
+    parser.add_argument("--llm-triage", action="store_true")
+    parser.add_argument("--triage-conf", type=float, default=0.7)
+    parser.add_argument("--max-triage", type=int, default=25)
+    parser.add_argument("--judge-timeout", type=int, default=30)
     return parser
 
 
@@ -499,6 +753,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_links=args.max_links,
             top_neighbors=args.top_neighbors,
             proposals_days=args.proposals_days,
+            llm_triage=args.llm_triage,
+            triage_conf=args.triage_conf,
+            max_triage=args.max_triage,
+            judge_timeout=args.judge_timeout,
         )
     except Exception as error:  # noqa: BLE001 — CLI возвращает контрактный exit 1
         print(
