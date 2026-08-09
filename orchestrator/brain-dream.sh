@@ -383,7 +383,7 @@ check_dependencies() {
   local missing=0
   local dep
 
-  for dep in jq curl claude flock; do
+  for dep in jq curl claude-pool flock; do
     if ! command -v "$dep" >/dev/null 2>&1; then
       log "stage=start error=missing_dependency dependency=$dep"
       missing=1
@@ -556,7 +556,7 @@ run_sonnet_iteration() {
 КОНТЕКСТ НОД:
 $context"
 
-  if ! response="$(claude -p --model "$DREAM_SONNET_MODEL" --output-format json "$instruction" 2>/dev/null)"; then
+  if ! response="$(claude-pool --headless -- -p --model "$DREAM_SONNET_MODEL" --output-format json "$instruction" 2>/dev/null)"; then
     log "stage=sonnet event=claude_failed iteration=$iteration mode=$mode lens=$lens_key"
     return 1
   fi
@@ -1497,7 +1497,7 @@ PROMPT
   # Промпт идёт через stdin, НЕ одним CLI-аргументом: при ~120 кандидатах он
   # превышает лимит Linux на длину одного аргумента (MAX_ARG_STRLEN ≈ 128 КБ) →
   # «Argument list too long» → мгновенный фейл синтеза (нода = сырой fallback).
-  if synthesis_text="$(claude -p --model "$DREAM_SONNET_MODEL" < "$PROMPT_FILE" 2>/dev/null)" \
+  if synthesis_text="$(claude-pool --headless -- -p --model "$DREAM_SONNET_MODEL" < "$PROMPT_FILE" 2>/dev/null)" \
      && [[ -n "$synthesis_text" ]]; then
     printf '%s\n' "$synthesis_text"
   else
