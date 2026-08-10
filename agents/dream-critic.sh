@@ -281,7 +281,7 @@ fi
 # ── Call Sonnet ───────────────────────────────────────────────────────────────
 log INFO "calling_sonnet"
 claude_response=""
-if ! claude_response=$(claude -p --model sonnet --output-format json "$(cat "$prompt_file")" 2>/dev/null); then
+if ! claude_response=$(claude-pool --headless -- -p --model sonnet --output-format json "$(cat "$prompt_file")" 2>/dev/null); then
   log ERROR "claude_failed"
   cat <<FAIL
 {"version":"1","agent_name":"$AGENT_NAME","status":"failed","duration_s":$(($(date +%s)-START_TIME)),"errors":["claude_call_failed"]}

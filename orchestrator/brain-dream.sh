@@ -67,6 +67,10 @@ Env params:
   DREAM_PRICE_OUT_PER_M default: 9.00   (цена выходных токенов за 1M)
   DREAM_SATURATION_MIN_YIELD       default: 3   (early-stop: мин. прирост кандидатов за интервал; 0 = выкл)
   DREAM_SATURATION_CHECK_INTERVAL  default: 50  (проходов между проверками насыщения)
+  DREAM_OBSERVATIONS               default: 1   (мост «наблюдения → сон»: +1 проход с линзой practice; 0 = выкл)
+  DREAM_OBSERVATIONS_URL           default: http://gena-vps:3007/api/observations/digest
+  DREAM_OBSERVATIONS_MAX_ITEMS     default: 12  (сколько наблюдений максимум в контекст)
+  DREAM_OBSERVATIONS_MIN_OCC       default: 40  (порог повторов для «практики без ноды в графе»)
 
 Domain paths:
   travelmart -> $HOME/brain/travelmart/nodes
@@ -237,8 +241,24 @@ DREAM_DIGEST_DEDUP="${DREAM_DIGEST_DEDUP:-1}"
 DREAM_DIGEST_DEDUP_DAYS="${DREAM_DIGEST_DEDUP_DAYS:-5}"
 DREAM_DIGEST_DEDUP_MODEL="${DREAM_DIGEST_DEDUP_MODEL:-flash}"
 
+# Мост «наблюдения → сон»: поведенческий срез из pattern-mining session-manager.
+# Вход сна — граф: он видит, что ЗАПИСАНО, но не видит, что делают руками.
+# Мост приносит уже агрегированный срез (что повторяется и какие артефакты
+# реально лежат на диске) и тратит на него РОВНО ОДИН проход генерации с линзой
+# `practice`. Fail-open на всех уровнях: нет соседнего хоста → берём кэш; нет
+# кэша → сон идёт как раньше. Подробности: docs/05-observations-bridge.md.
+DREAM_OBSERVATIONS="${DREAM_OBSERVATIONS:-1}"
+DREAM_OBSERVATIONS_URL="${DREAM_OBSERVATIONS_URL:-http://gena-vps:3007/api/observations/digest}"
+DREAM_OBSERVATIONS_LIMIT="${DREAM_OBSERVATIONS_LIMIT:-50}"
+DREAM_OBSERVATIONS_TIMEOUT="${DREAM_OBSERVATIONS_TIMEOUT:-10}"
+DREAM_OBSERVATIONS_MAX_ITEMS="${DREAM_OBSERVATIONS_MAX_ITEMS:-12}"
+DREAM_OBSERVATIONS_MIN_OCC="${DREAM_OBSERVATIONS_MIN_OCC:-40}"
+DREAM_OBSERVATIONS_MAX_CHARS="${DREAM_OBSERVATIONS_MAX_CHARS:-12000}"
+DREAM_OBSERVATIONS_CACHE_MAX_AGE_H="${DREAM_OBSERVATIONS_CACHE_MAX_AGE_H:-72}"
+
 LOG_FILE="$HOME/life/state/logs/brain-dream.log"
-GEMINI_SH="$ORCHESTRATOR_DIR/gemini.sh"
+# Переопределяется в тестах стабом; в проде всегда соседний gemini.sh.
+GEMINI_SH="${GEMINI_SH:-$ORCHESTRATOR_DIR/gemini.sh}"
 UTC_DATE="$(date -u +%F)"
 OUT_MD="$DREAM_OUT_DIR/dream-$UTC_DATE.md"
 OUT_PNG="$DREAM_OUT_DIR/dream-$UTC_DATE.png"
@@ -259,6 +279,14 @@ PROMPT_FILE=""
 # run_digest_dedup; пусто => digest_title_block падает на extract_top_titles).
 DIGEST_REGISTRY="$DREAM_OUT_DIR/.digest-published.jsonl"
 DIGEST_TITLES_FILE="$DREAM_OUT_DIR/.digest-titles.txt"
+# Мост наблюдений: скрипт + его состояние (последний успешный срез, что уже
+# скормили сну, машинный лог выборки последнего прогона).
+OBSERVATIONS_BRIDGE="$BRAIN_DREAM_REPO/tools/observations-bridge.py"
+OBSERVATIONS_CACHE="$DREAM_OUT_DIR/.observations-cache.json"
+OBSERVATIONS_LEDGER="$DREAM_OUT_DIR/.observations-seen.jsonl"
+OBSERVATIONS_SELECTION="$DREAM_OUT_DIR/.observations-selection.json"
+PRACTICE_LAUNCHED=0
+PRACTICE_STATUS="off"
 
 TEMP_FILES=()
 PIDS=()
@@ -383,7 +411,7 @@ check_dependencies() {
   local missing=0
   local dep
 
-  for dep in jq curl claude flock; do
+  for dep in jq curl claude-pool flock; do
     if ! command -v "$dep" >/dev/null 2>&1; then
       log "stage=start error=missing_dependency dependency=$dep"
       missing=1
@@ -556,7 +584,7 @@ run_sonnet_iteration() {
 КОНТЕКСТ НОД:
 $context"
 
-  if ! response="$(claude -p --model "$DREAM_SONNET_MODEL" --output-format json "$instruction" 2>/dev/null)"; then
+  if ! response="$(claude-pool --headless -- -p --model "$DREAM_SONNET_MODEL" --output-format json "$instruction" 2>/dev/null)"; then
     log "stage=sonnet event=claude_failed iteration=$iteration mode=$mode lens=$lens_key"
     return 1
   fi
@@ -1304,6 +1332,92 @@ launch_iteration() {
   log "stage=${RUN_ENGINE:-gemini} phase=$phase iterations_launched=$LAUNCHED runs=$RUNS active=${#PIDS[@]} mode=$mode lens=$lens_key target=\"$domain_label\""
 }
 
+# ── Линза `practice`: граф против практики ───────────────────────────────────
+# Единственная линза, которой на вход идут НЕ ноды графа, а поведенческий срез
+# (что реально делают руками) + те ноды, которые про это что-то утверждают.
+# Задача — не пересказать наблюдение, а найти расхождение в графе.
+PRACTICE_LENS_PROMPT="В контексте два разнородных блока: PRACTICE DIGEST — агрегат того, что человек и агенты РЕАЛЬНО делают руками в сессиях (повторы, каналы реализации, проверенные на диске артефакты), и NODE — узлы графа знаний. Найди РАСХОЖДЕНИЯ между графом и практикой:
+- узел утверждает, что чего-то нет / что-то отложено / только предложено, а artifact_on_disk подтверждает, что оно построено — узел устарел, назови его id;
+- практика повторяется десятки раз, а в графе про неё нет ни одной ноды (class=unwritten-practice) — назови, какого знания графу не хватает;
+- артефакт построен, но в графе про него ничего нет (class=undocumented-reality) — граф не знает о собственном инструменте;
+- несколько нод описывают одно и то же как «предложено», хотя оно уже сделано — цепочка не закрыта supersede-ребром.
+Инсайт должен быть про ГРАФ (что в нём устарело, чего не хватает, что надо связать), а не пересказ наблюдения. Пустых «надо бы задокументировать» не писать: называй конкретные id узлов и конкретное расхождение."
+
+# Один проход генерации по поведенческому срезу. Возвращает 0 всегда: мост —
+# необязательный источник, его отсутствие не должно ронять ночь.
+run_practice_pass() {
+  local ctx rc allowed label engine
+
+  if [[ "$DREAM_OBSERVATIONS" != "1" ]]; then
+    PRACTICE_STATUS="disabled"
+    log "stage=practice event=skip reason=disabled"
+    return 0
+  fi
+  if [[ ! -f "$OBSERVATIONS_BRIDGE" ]]; then
+    PRACTICE_STATUS="bridge_missing"
+    log "stage=practice event=skip reason=bridge_missing path=$OBSERVATIONS_BRIDGE"
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    PRACTICE_STATUS="no_python3"
+    log "stage=practice event=skip reason=no_python3"
+    return 0
+  fi
+  if cost_limit_reached; then
+    PRACTICE_STATUS="cost_limit"
+    log "stage=practice event=skip reason=cost_limit spent=$(spent_usd)"
+    return 0
+  fi
+  if ((DEADLINE_EPOCH > 0)) && (($(now_epoch) >= DEADLINE_EPOCH - 300)); then
+    PRACTICE_STATUS="deadline_buffer"
+    log "stage=practice event=skip reason=deadline_buffer"
+    return 0
+  fi
+
+  rc=0
+  ctx="$(python3 "$OBSERVATIONS_BRIDGE" \
+    --url "$DREAM_OBSERVATIONS_URL" \
+    --limit "$DREAM_OBSERVATIONS_LIMIT" \
+    --timeout "$DREAM_OBSERVATIONS_TIMEOUT" \
+    --cache "$OBSERVATIONS_CACHE" \
+    --cache-max-age-h "$DREAM_OBSERVATIONS_CACHE_MAX_AGE_H" \
+    --ledger "$OBSERVATIONS_LEDGER" \
+    --domains "$DREAM_DOMAINS" \
+    --nodes-tsv "$NODES_FILE" \
+    --max-items "$DREAM_OBSERVATIONS_MAX_ITEMS" \
+    --min-occurrences "$DREAM_OBSERVATIONS_MIN_OCC" \
+    --max-chars "$DREAM_OBSERVATIONS_MAX_CHARS" \
+    --json-out "$OBSERVATIONS_SELECTION" \
+    --dream-date "$UTC_DATE" 2>>"$LOG_FILE")" || rc=$?
+
+  if ((rc == 3)) || [[ -z "$ctx" ]]; then
+    PRACTICE_STATUS="no_signal"
+    log "stage=practice event=skip reason=no_new_observations rc=$rc"
+    return 0
+  fi
+  if ((rc != 0)); then
+    PRACTICE_STATUS="bridge_error"
+    log "stage=practice event=skip reason=bridge_error rc=$rc"
+    return 0
+  fi
+
+  allowed="$(jq -c '.allowed_ids // []' "$OBSERVATIONS_SELECTION" 2>/dev/null || printf '[]')"
+  label="practice/observations"
+
+  if [[ "$DREAM_SONNET_FALLBACK" == "1" ]] && ((GEMINI_UNAVAILABLE == 1)); then
+    engine="sonnet"
+    run_sonnet_iteration 0 "practice" "$label" "practice" "$PRACTICE_LENS_PROMPT" "$ctx" "$allowed" || true
+  else
+    engine="gemini"
+    run_generation_iteration 0 "practice" "$label" "practice" "$PRACTICE_LENS_PROMPT" "$ctx" "$allowed" || true
+  fi
+
+  PRACTICE_LAUNCHED=1
+  PRACTICE_STATUS="fed"
+  log "stage=practice event=done engine=$engine context_chars=${#ctx} observations=$(jq -r '.stats.fed // 0' "$OBSERVATIONS_SELECTION" 2>/dev/null || printf '?') source=$(jq -r '.source // "?"' "$OBSERVATIONS_SELECTION" 2>/dev/null || printf '?')"
+  return 0
+}
+
 # Дедупликация кандидатов против registry .insight-hashes.jsonl.
 # Дубликаты (hash уже в окне DREAM_DEDUP_WINDOW_DAYS) ВЫХОДЯТ из CANDIDATES_FILE,
 # а у их соответствующих registry-записей инкрементится hit_count + confidence.
@@ -1497,7 +1611,7 @@ PROMPT
   # Промпт идёт через stdin, НЕ одним CLI-аргументом: при ~120 кандидатах он
   # превышает лимит Linux на длину одного аргумента (MAX_ARG_STRLEN ≈ 128 КБ) →
   # «Argument list too long» → мгновенный фейл синтеза (нода = сырой fallback).
-  if synthesis_text="$(claude -p --model "$DREAM_SONNET_MODEL" < "$PROMPT_FILE" 2>/dev/null)" \
+  if synthesis_text="$(claude-pool --headless -- -p --model "$DREAM_SONNET_MODEL" < "$PROMPT_FILE" 2>/dev/null)" \
      && [[ -n "$synthesis_text" ]]; then
     printf '%s\n' "$synthesis_text"
   else
@@ -1550,7 +1664,11 @@ write_markdown_output() {
     printf -- '- Overrun budget: %s runs, %s min\n' "$DREAM_OVERRUN_RUNS" "$DREAM_OVERRUN_MIN"
     printf -- '- Gemini spent: $%s of $%s limit (in $%s/M, out $%s/M)\n' \
       "$(spent_usd)" "$DREAM_COST_LIMIT_USD" "$DREAM_PRICE_IN_PER_M" "$DREAM_PRICE_OUT_PER_M"
-    printf -- '- Token usage: %s\n\n' "$(token_usage_summary)"
+    printf -- '- Token usage: %s\n' "$(token_usage_summary)"
+    printf -- '- Practice bridge: %s%s\n\n' "$PRACTICE_STATUS" \
+      "$([[ "$PRACTICE_STATUS" == "fed" ]] && printf ' (%s наблюдений, источник %s)' \
+        "$(jq -r '.stats.fed // 0' "$OBSERVATIONS_SELECTION" 2>/dev/null || printf '?')" \
+        "$(jq -r '.source // "?"' "$OBSERVATIONS_SELECTION" 2>/dev/null || printf '?')")"
 
     if [[ "$DREAM_SONNET_COMPARE" == "1" ]]; then
       printf '## Сравнение Gemini vs Sonnet\n\n'
@@ -2299,6 +2417,11 @@ main() {
     RUN_ENGINE="gemini"
     log "stage=sonnet event=done launched=$SONNET_LAUNCHED reason=$STOP_REASON_SONNET session_share=$(sonnet_session_share_pct)% ref_api_cost=\$$(spent_usd_sonnet)"
   fi
+
+  # Поведенческий проход: один вызов модели по агрегату наблюдений. Кандидаты
+  # падают в общий CANDIDATES_FILE и дальше идут через тот же дедуп и синтез.
+  STAGE="practice"
+  run_practice_pass
 
   # Flat-file lookup: однократно загружаем хэши реестра (в окне дедупа) в tmp
   # и переключаем registry_has_hash на grep — вместо per-candidate jq-процесса.

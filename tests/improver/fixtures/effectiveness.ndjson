@@ -1,0 +1,17 @@
+{"ts":"2026-07-01T00:00:00Z","surface":"coverage","sid":"c1","stage":"coverage-judge","node_ids":["node-b","node-a"],"ms":100,"outcome":"judge-gap"}
+{"ts":"2026-07-02T00:00:00Z","surface":"coverage","sid":"c2","stage":"coverage-judge","node_ids":["node-a","node-b"],"ms":120,"outcome":"judge_gap"}
+{"ts":"2026-07-03T00:00:00Z","surface":"coverage","sid":"c3","stage":"coverage-judge","node_ids":["node-b","node-a"],"ms":110,"outcome":"coverage-miss"}
+{"ts":"2026-07-01T00:00:00Z","surface":"hook","sid":"n1","stage":"brain-nudge","node_ids":[],"ms":10,"outcome":"declined","keyword":"noisy"}
+{"ts":"2026-07-02T00:00:00Z","surface":"hook","sid":"n2","stage":"brain-nudge","node_ids":[],"ms":10,"outcome":"dismissed","keyword":"noisy"}
+{"ts":"2026-07-03T00:00:00Z","surface":"hook","sid":"n3","stage":"brain-nudge","node_ids":[],"ms":10,"outcome":"rejected","keyword":"noisy"}
+{"ts":"2026-07-01T00:00:00Z","surface":"retrieval","sid":"j1","stage":"llm-judge","node_ids":[],"ms":100,"outcome":"ok"}
+{"ts":"2026-07-02T00:00:00Z","surface":"retrieval","sid":"j2","stage":"llm-judge","node_ids":[],"ms":700,"outcome":"ok"}
+{"ts":"2026-07-03T00:00:00Z","surface":"retrieval","sid":"j3","stage":"llm-judge","node_ids":[],"ms":2000,"outcome":"ok"}
+{"ts":"2026-07-01T00:00:00Z","surface":"observer","sid":"s1","stage":"matched","node_ids":[],"ms":10,"outcome":"ok"}
+{"ts":"2026-07-02T00:00:00Z","surface":"observer","sid":"s2","stage":"matched","node_ids":[],"ms":10,"outcome":"ok"}
+{"ts":"2026-07-03T00:00:00Z","surface":"observer","sid":"s3","stage":"matched","node_ids":[],"ms":10,"outcome":"ok"}
+{"ts":"2026-07-04T00:00:00Z","surface":"observer","sid":"s4","stage":"skip-empty","node_ids":[],"ms":10,"outcome":"skip"}
+{"ts":"2026-07-05T00:00:00Z","surface":"observer","sid":"s5","stage":"skip-no-context","node_ids":[],"ms":10,"outcome":"skip"}
+{"ts":"2026-07-06T00:00:00Z","surface":"observer","sid":"s6","stage":"no_match","node_ids":[],"ms":10,"outcome":"no_match"}
+{"ts":"2026-07-07T00:00:00Z","surface":"observer","sid":"s7","stage":"skip-no-context","node_ids":[],"ms":10,"outcome":"skip"}
+{"ts":"2026-07-08T00:00:00Z","surface":"observer","sid":"s8","stage":"no_match","node_ids":[],"ms":10,"outcome":"no_match"}
