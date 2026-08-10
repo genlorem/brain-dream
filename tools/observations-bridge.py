@@ -253,6 +253,8 @@ class Observation:
     sessions: int
     projects: int
     score: int
+    summary_as_of: int = 0
+    text_predates_build: bool = False
     tokens: list[str] = field(default_factory=list)
     nodes: list[Node] = field(default_factory=list)
     klass: str = ""
@@ -287,6 +289,11 @@ def as_obs(raw: dict[str, Any]) -> Observation:
         sessions=i("sessions"),
         projects=i("projects"),
         score=i("score"),
+        summary_as_of=i("summaryAsOf"),
+        # Явный флаг стороны session-manager: текст написан до постройки артефакта.
+        # Старые срезы (в т.ч. лежащие в кэше) поля не имеют — тогда работает
+        # собственная эвристика по is_reality.
+        text_predates_build=raw.get("textPredatesBuild") is True,
     )
 
 
@@ -602,13 +609,16 @@ def render(
         lines.append(f"title: {obs.title}")
         # У построенного артефакта summary/proposal — это план постройки,
         # написанный ДО неё («подкоманды нет, отложена на этап 2»). Модель
-        # принимает такой текст за факт и выдаёт вывод, противоречащий диску,
-        # поэтому у materialized-наблюдений proposal режем совсем, а summary
-        # укорачиваем.
-        summary_cap = 300 if obs.is_reality else 600
+        # принимает такой текст за факт и выдаёт вывод, противоречащий диску.
+        # С 2026-08-10 сторона session-manager сама помечает такой текст
+        # (`textPredatesBuild`) и не отдаёт `proposal`; эвристика по is_reality
+        # остаётся для старых срезов из кэша.
+        stale_text = obs.text_predates_build or obs.is_reality
+        summary_cap = 300 if stale_text else 600
         if obs.summary and obs.summary != obs.title:
-            lines.append(f"summary (написан до проверки артефакта): {obs.summary[:summary_cap]}")
-        if obs.proposal and not obs.is_reality:
+            label = "summary (написан ДО постройки артефакта)" if stale_text else "summary"
+            lines.append(f"{label}: {obs.summary[:summary_cap]}")
+        if obs.proposal and not stale_text:
             lines.append(f"proposal: {obs.proposal[:400]}")
         if obs.nodes:
             lines.append("graph_nodes_about_it:")
