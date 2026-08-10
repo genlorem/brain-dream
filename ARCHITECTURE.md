@@ -95,6 +95,16 @@ Each agent is an executable file in `agents/<name>.{sh|py|js}`.
 
 Per-project agents (vipzal-, marquiz-, etc.) — **not yet**, only if KPI shows weakness in those domains.
 
+## Входы ночного прогона
+
+| Вход | Что даёт | Механика |
+|---|---|---|
+| Граф `~/brain/<domain>/nodes` | что **записано** | 8 линз, NREM/REM, сэмплинг с recency-bias |
+| Наблюдения session-manager | что **делают руками** | линза `practice`, один проход за ночь, [`docs/05-observations-bridge.md`](docs/05-observations-bridge.md) |
+
+Второй вход необязателен и fail-open: соседний хост недоступен → берётся кэш,
+кэша нет → ночь идёт ровно как раньше.
+
 ## Safety layers
 
 ### 1. Read-only on source domains
