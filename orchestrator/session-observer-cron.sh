@@ -5,8 +5,8 @@
 #   0 */6 * * * flock -n /tmp/session-observer.lock /home/gen/Projects/brain-dream/orchestrator/session-observer-cron.sh
 set -euo pipefail
 
-REPO="/home/gen/Projects/brain-dream"
-LOG="/home/gen/life/state/logs/session-observer.log"
+REPO="${REPO:-$HOME/Projects/brain-dream}"
+LOG="${LOG:-$HOME/life/state/logs/session-observer.log}"
 mkdir -p "$(dirname "$LOG")"
 exec >>"$LOG" 2>&1
 

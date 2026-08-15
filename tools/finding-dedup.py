@@ -28,7 +28,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, "/home/gen/brain/engine")
+import os
+sys.path.insert(0, os.environ.get("BRAIN_ENGINE_DIR", os.path.expanduser("~/brain/engine")))
 import semantic  # noqa: E402 — fastembed MiniLM, normalized vectors
 
 DEFAULT_THRESHOLD = 0.86
