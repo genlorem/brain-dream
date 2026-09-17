@@ -4,8 +4,11 @@
 # nice/ionice: finding-dedup.py (fastembed, ~20 потоков, 440% CPU) в 06:00 UTC давал
 # load 22-25 на 7 ядрах и тормозил интерактивные сессии (2026-09-16); фоновая
 # работа обязана уступать CPU/IO, наследуется всеми детьми агента.
-# Установка crontab:
-#   0 */6 * * * flock -n /tmp/session-observer.lock /home/gen/Projects/brain-dream/orchestrator/session-observer-cron.sh
+# nice одного не хватило (PSI cpu 40-77% в часы прогона, телеметрия 15-17.09): прогон
+# идёт transient-юнитом в ccwork.slice с жёстким CPUQuota=200%. Корень длительности
+# (перезакладка всего корпуса эмбеддингов на каждый вызов) закрыт кэшем в finding-dedup.py.
+# Установка crontab (XDG_RUNTIME_DIR нужен systemd-run --user из cron-окружения):
+#   0 */6 * * * XDG_RUNTIME_DIR=/run/user/1000 flock -n /tmp/session-observer.lock systemd-run --user --quiet --wait --collect --slice=ccwork.slice --unit=session-observer-cron -p CPUQuota=200% /home/genlorem/Projects/brain-dream/orchestrator/session-observer-cron.sh
 set -euo pipefail
 
 REPO="${REPO:-$HOME/Projects/brain-dream}"

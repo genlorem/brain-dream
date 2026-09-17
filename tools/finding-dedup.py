@@ -16,11 +16,16 @@ Exact content-hash не ловит переформулировки Gemini (од
       `<hash>\\t(NEW|DUP)\\t<matched_id|->\\t<score>`. Агент пропускает DUP.
 
 Порог по умолчанию 0.86 (paraphrase-MiniLM: near-dup переформулировки ~0.85-0.95).
+
+Эмбеддинги существующих узлов кэшируются (FINDING_EMBED_CACHE, npz, ключ —
+sha1 текста узла): без кэша каждый вызов заново эмбеддил весь корпус (4.5k узлов,
+~4 мин при 300-400% CPU) ради 1-3 кандидатов — замер 2026-09-17.
 """
 from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import os
 import re
 import subprocess
@@ -28,11 +33,49 @@ import sys
 
 import numpy as np
 
-import os
 sys.path.insert(0, os.environ.get("BRAIN_ENGINE_DIR", os.path.expanduser("~/brain/engine")))
 import semantic  # noqa: E402 — fastembed MiniLM, normalized vectors
 
 DEFAULT_THRESHOLD = 0.86
+CACHE_PATH = os.environ.get("FINDING_EMBED_CACHE") or os.path.expanduser(
+    "~/.cache/brain-dream/finding-embed-cache.npz"
+)
+
+
+def _load_cache() -> dict[str, np.ndarray]:
+    try:
+        with np.load(CACHE_PATH, allow_pickle=False) as z:
+            if str(z["model"]) != semantic.MODEL_NAME:
+                return {}
+            return dict(zip(z["keys"].tolist(), z["vecs"]))
+    except (OSError, KeyError, ValueError):
+        return {}
+
+
+def _save_cache(keys: list[str], vecs: np.ndarray) -> None:
+    os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+    tmp = CACHE_PATH + ".tmp"
+    with open(tmp, "wb") as fh:  # file object: np.savez не дописывает .npz к имени
+        np.savez(fh, keys=np.array(keys, dtype="U40"), vecs=vecs.astype(np.float32),
+                 model=np.array(semantic.MODEL_NAME))
+    os.replace(tmp, CACHE_PATH)
+
+
+def embed_nodes_cached(nodes: list[dict]) -> np.ndarray:
+    """Векторы узлов: из кэша по sha1 текста, эмбеддим только отсутствующие.
+    Кэш после вызова содержит ровно текущий корпус (удалённые узлы выпадают)."""
+    keys = [hashlib.sha1(n["text"].encode("utf-8")).hexdigest() for n in nodes]
+    cache = _load_cache()
+    missing = [i for i, k in enumerate(keys) if k not in cache]
+    if missing:
+        new = semantic.embed([nodes[i]["text"] for i in missing])
+        for i, v in zip(missing, new):
+            cache[keys[i]] = v
+    vecs = np.stack([cache[k] for k in keys]) if keys else np.zeros((0, 0), dtype=np.float32)
+    if missing or len(cache) != len(set(keys)):
+        _save_cache(keys, vecs)
+    print(f"embed-cache: {len(keys) - len(missing)} hit, {len(missing)} embedded", file=sys.stderr)
+    return vecs
 
 
 def parse_node(path: str) -> dict:
@@ -79,7 +122,7 @@ def cmd_clean(args) -> None:
         print("нет finding-*.md", file=sys.stderr)
         return
     nodes = [parse_node(f) for f in files]
-    vecs = semantic.embed([n["text"] for n in nodes])
+    vecs = embed_nodes_cached(nodes)
     reps, dup_of = cluster(nodes, vecs, args.threshold)
 
     dups = sorted(dup_of.items(), key=lambda kv: -kv[1][1])
@@ -118,7 +161,7 @@ def cmd_check(args) -> None:
     files = sorted(glob.glob(os.path.join(args.nodes_dir, "finding-*.md")))
     existing = [parse_node(f) for f in files]
     if existing:
-        ex_vecs = semantic.embed([n["text"] for n in existing])
+        ex_vecs = embed_nodes_cached(existing)
     cand_vecs = semantic.embed([t for _, t in cands])
     for k, (h, _) in enumerate(cands):
         if not existing:
