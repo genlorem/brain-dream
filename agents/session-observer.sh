@@ -29,7 +29,10 @@ SESSION_IDLE_MIN="${SESSION_IDLE_MIN:-30}"
 SESSION_MAX_AGE_DAYS="${SESSION_OBSERVER_MAX_AGE_DAYS:-30}"
 # Per-run предохранитель: не более N сессий с LLM-вызовом за прогон (cost-guard сейчас
 # no-op, т.к. gemini.sh не возвращает $). Остаток догоняется следующими прогонами.
-SESSION_MAX_PER_RUN="${SESSION_OBSERVER_MAX_PER_RUN:-25}"
+# 25 → 60 (18.09.2026): при ~237 новых сессиях в сутки и 4 прогонах лимит 25 не давал
+# бэклогу таять (каждый прогон упирался в max_per_run при 8112 найденных); прогон
+# после кэша эмбеддингов стоит минуты, потолок теперь — вызовы Gemini.
+SESSION_MAX_PER_RUN="${SESSION_OBSERVER_MAX_PER_RUN:-60}"
 # Пропускать сессии короче N сообщений (тривиальные, без находок).
 SESSION_MIN_MSGS="${SESSION_OBSERVER_MIN_MSGS:-8}"
 
@@ -185,70 +188,32 @@ LAST_MSG_IDX=0
 parse_session_chunk() {
   local session_path="$1"
   local start_idx="$2"
-  local line_num=0
-  local transcript_parts=()
-  local last_idx=0
   local tool_dump_limit=2000
 
   TRANSCRIPT=""
   LAST_MSG_IDX="$start_idx"
 
-  while IFS= read -r line; do
-    [ -z "$line" ] && { line_num=$((line_num + 1)); continue; }
-
-    if (( line_num < start_idx )); then
-      line_num=$((line_num + 1))
-      continue
-    fi
-
-    last_idx="$line_num"
-
-    # Извлечь role и content
-    local role content_raw content_text
-    role=$(printf '%s' "$line" | jq -r '.message.role // empty' 2>/dev/null || true)
-    content_raw=$(printf '%s' "$line" | jq -c '.message.content // empty' 2>/dev/null || true)
-
-    [ -z "$role" ] && { line_num=$((line_num + 1)); continue; }
-
-    # content может быть строкой или массивом блоков
-    local content_type
-    content_type=$(printf '%s' "$content_raw" | jq -r 'type' 2>/dev/null || printf 'null')
-
-    if [ "$content_type" = "string" ]; then
-      content_text=$(printf '%s' "$content_raw" | jq -r '.' 2>/dev/null || true)
-    elif [ "$content_type" = "array" ]; then
-      # Собрать текстовые части: type="text" -> .text; tool_result -> text part
-      content_text=$(printf '%s' "$content_raw" | jq -r '
-        .[] |
-        if .type == "text" then .text
-        elif .type == "tool_result" then
-          (.content // []) |
-          if type == "array" then [.[] | select(.type=="text") | .text] | join(" ")
-          elif type == "string" then .
-          else ""
-          end
-        else ""
-        end' 2>/dev/null | tr '\n' ' ' || true)
-    else
-      content_text=""
-    fi
-
-    [ -z "$content_text" ] && { line_num=$((line_num + 1)); continue; }
-
-    # Усечь большие дампы
-    if [ "${#content_text}" -gt "$tool_dump_limit" ]; then
-      content_text="${content_text:0:$tool_dump_limit}...[truncated]"
-    fi
-
-    transcript_parts+=("[${role}] ${content_text}")
-    line_num=$((line_num + 1))
-  done < "$session_path"
-
-  LAST_MSG_IDX="$last_idx"
-
-  if [ "${#transcript_parts[@]}" -gt 0 ]; then
-    TRANSCRIPT=$(printf '%s\n' "${transcript_parts[@]}")
-  fi
+  # Один проход jq на файл вместо трёх jq на КАЖДУЮ строку (до 18.09.2026: тысячи
+  # форков на длинный транскрипт). Семантика прежняя: строки с индекса start_idx,
+  # пустые пропускаются, невалидный JSON и записи без роли — тоже; text-блоки и
+  # текстовые части tool_result склеиваются пробелом, переводы строк → пробел;
+  # дампы длиннее лимита усекаются. Пустой текст больше не даёт строку "[role] ".
+  LAST_MSG_IDX=$(awk -v s="$start_idx" 'NR-1>=s && $0!="" {l=NR-1} END{print (l=="" ? 0 : l)}' "$session_path")
+  TRANSCRIPT=$(jq -r -R -n --argjson start "$start_idx" --argjson lim "$tool_dump_limit" '
+    [inputs] | to_entries[] | select(.key >= $start) | select(.value != "")
+    | (.value | fromjson? // null) as $o | select($o != null)
+    | ($o.message.role // empty) as $role
+    | ($o.message.content // empty) as $c
+    | (if ($c|type) == "string" then $c
+       elif ($c|type) == "array" then
+         ([$c[] | if .type == "text" then .text
+                  elif .type == "tool_result" then ((.content // []) | if type == "array" then [.[] | select(.type == "text") | .text] | join(" ") elif type == "string" then . else "" end)
+                  else "" end]
+          | join("\n") | gsub("\n"; " "))
+       else "" end) as $t
+    | select($t != "")
+    | (if ($t|length) > $lim then ($t[:$lim] + "...[truncated]") else $t end) as $t2
+    | "[\($role)] \($t2)"' < "$session_path" 2>/dev/null || true)
 }
 
 # ── Build distillation prompt ─────────────────────────────────────────────────
