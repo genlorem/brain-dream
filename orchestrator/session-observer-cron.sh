@@ -7,8 +7,10 @@
 # nice одного не хватило (PSI cpu 40-77% в часы прогона, телеметрия 15-17.09): прогон
 # идёт transient-юнитом в ccwork.slice с жёстким CPUQuota=200%. Корень длительности
 # (перезакладка всего корпуса эмбеддингов на каждый вызов) закрыт кэшем в finding-dedup.py.
-# Установка crontab (XDG_RUNTIME_DIR нужен systemd-run --user из cron-окружения):
-#   0 */6 * * * XDG_RUNTIME_DIR=/run/user/1000 flock -n /tmp/session-observer.lock systemd-run --user --quiet --wait --collect --slice=ccwork.slice --unit=session-observer-cron -p CPUQuota=200% /home/genlorem/Projects/brain-dream/orchestrator/session-observer-cron.sh
+# Установка crontab (XDG_RUNTIME_DIR нужен systemd-run --user из cron-окружения; `%` в
+# crontab — разделитель stdin, экранировать `\%`: без этого прогоны 18:00 и 00:00 17-18.09
+# молча не стартовали — cron отдал systemd-run «CPUQuota=200» и пустую команду):
+#   0 */6 * * * XDG_RUNTIME_DIR=/run/user/1000 flock -n /tmp/session-observer.lock systemd-run --user --quiet --wait --collect --slice=ccwork.slice --unit=session-observer-cron -p CPUQuota=200\% /home/genlorem/Projects/brain-dream/orchestrator/session-observer-cron.sh
 set -euo pipefail
 
 REPO="${REPO:-$HOME/Projects/brain-dream}"
