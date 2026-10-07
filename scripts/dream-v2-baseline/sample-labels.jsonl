@@ -1,0 +1,40 @@
+{"id": "2026-09-01#2", "closure": "OPEN", "actor": "owner", "evidence": "govori: decision:govori-store-billing-open still open; 1 commit since 09-01", "resolved_at": null}
+{"id": "2026-09-01#7", "closure": "KNOWN-BEFORE", "actor": "owner", "evidence": "decision:vlad-debt-ledger-final-2026-08-17 (3.5M ₸ @16.75%), project:loan-vlad", "resolved_at": null}
+{"id": "2026-09-01#8", "closure": "UNVERIFIABLE", "actor": "agent", "evidence": "~/life/finance/investment_plan.md updated 2026-10-05, no explicit 2.5M recalculation found", "resolved_at": null}
+{"id": "2026-09-01#9", "closure": "UNVERIFIABLE", "actor": "owner", "evidence": "no Brain/git evidence of photo-hub in SMM", "resolved_at": null}
+{"id": "2026-09-03#3", "closure": "RESOLVED", "actor": "owner", "evidence": "decision:tm-return-watch-revision-verdict-2026-09-25 (VIP-7584 reached test, returned); date unknown", "resolved_at": null}
+{"id": "2026-09-03#4", "closure": "RESOLVED", "actor": "agent", "evidence": "note:sm-cheap-llm-koda-free-provider-2026-09-18 (SPOF replaced; health still lies)", "resolved_at": "2026-09-18"}
+{"id": "2026-09-03#7", "closure": "KNOWN-BEFORE", "actor": "agent", "evidence": "lesson:ozon-analytics-90d-window-kills-seasonal-skus-2026-08-10", "resolved_at": null}
+{"id": "2026-09-03#9", "closure": "RESOLVED", "actor": "owner", "evidence": "decision:marquiz-too-kz-astana-hub-not-usn-2026-10-01 (Astana Hub part; Reg.ru unverified)", "resolved_at": "2026-10-01"}
+{"id": "2026-09-04#6", "closure": "UNVERIFIABLE", "actor": "agent", "evidence": "no supersede evidence checked", "resolved_at": null}
+{"id": "2026-09-08#1", "closure": "OPEN", "actor": "owner", "evidence": "no succession/power-of-attorney node; theme repeats to 2026-10-07", "resolved_at": null}
+{"id": "2026-09-08#6", "closure": "UNVERIFIABLE", "actor": "vague", "evidence": "generic rule, nothing to check", "resolved_at": null}
+{"id": "2026-09-08#7", "closure": "UNVERIFIABLE", "actor": "agent", "evidence": "lesson:mcp-gateway-missing-upstream-creds-silently-drops-tools-2026-09-06; no fix commit found", "resolved_at": null}
+{"id": "2026-09-08#8", "closure": "KNOWN-BEFORE", "actor": "agent", "evidence": "note:vipzal-admin-task-registry-audit-2026-09-02, vipzal-task-registry-enabled-VIP-7870-2026-09-06", "resolved_at": null}
+{"id": "2026-09-08#10", "closure": "OPEN", "actor": "agent", "evidence": "procedure:travelmart-cleanup-branch-stands-2026-08-07 last changed 2026-09-07; no guard", "resolved_at": null}
+{"id": "2026-09-09#3", "closure": "OPEN", "actor": "owner", "evidence": "no decision since; theme repeats to 2026-10-06", "resolved_at": null}
+{"id": "2026-09-10#1", "closure": "UNVERIFIABLE", "actor": "agent", "evidence": "Travelmart team code, not checked", "resolved_at": null}
+{"id": "2026-09-10#2", "closure": "OPEN", "actor": "owner", "evidence": "govori billing still open", "resolved_at": null}
+{"id": "2026-09-13#8", "closure": "OPEN", "actor": "owner", "evidence": "Balin deal: no decision since", "resolved_at": null}
+{"id": "2026-09-13#9", "closure": "OPEN", "actor": "owner", "evidence": "govori billing/do-phase still open", "resolved_at": null}
+{"id": "2026-09-14#5", "closure": "UNVERIFIABLE", "actor": "vague", "evidence": "fallback synthesis, boilerplate action", "resolved_at": null}
+{"id": "2026-09-15#10", "closure": "UNVERIFIABLE", "actor": "owner", "evidence": "personal notes, not checked", "resolved_at": null}
+{"id": "2026-09-16#10", "closure": "KNOWN-BEFORE", "actor": "agent", "evidence": "~/.claude/scripts/notion-page-masked.py mtime 2026-09-15 08:23", "resolved_at": null}
+{"id": "2026-09-20#4", "closure": "OPEN", "actor": "agent", "evidence": "no procedure:mem-report; repeated finding 2026-10-05", "resolved_at": null}
+{"id": "2026-09-21#1", "closure": "UNVERIFIABLE", "actor": "agent", "evidence": "deadline 01.10 passed; only liquidation decisions 09-29 found", "resolved_at": null}
+{"id": "2026-09-21#2", "closure": "RESOLVED", "actor": "agent", "evidence": "marquiz-reports commit 2026-10-03 payout_check per-name 1C<->Notion", "resolved_at": "2026-10-03"}
+{"id": "2026-09-21#5", "closure": "OPEN", "actor": "agent", "evidence": "procedure unchanged since 2026-09-07", "resolved_at": null}
+{"id": "2026-09-22#4", "closure": "OPEN", "actor": "owner", "evidence": "no SoT decision after 09-22", "resolved_at": null}
+{"id": "2026-09-22#7", "closure": "OPEN", "actor": "owner", "evidence": "govori: no sales/testers activity", "resolved_at": null}
+{"id": "2026-09-23#10", "closure": "OPEN", "actor": "owner", "evidence": "task:govori-android-device-test unchanged", "resolved_at": null}
+{"id": "2026-09-23#4", "closure": "UNVERIFIABLE", "actor": "owner", "evidence": "no dividend-residency node found", "resolved_at": null}
+{"id": "2026-09-24#10", "closure": "OPEN", "actor": "owner", "evidence": "govori: no sales started", "resolved_at": null}
+{"id": "2026-09-24#4", "closure": "KNOWN-BEFORE", "actor": "owner", "evidence": "note:marquiz-ooo-transfer-registry-not-blocking-2026-09-25 (July transfer plan)", "resolved_at": null}
+{"id": "2026-09-24#9", "closure": "UNVERIFIABLE", "actor": "owner", "evidence": "VIP-7782 nodes 09-21/09-22, markup point not checked", "resolved_at": null}
+{"id": "2026-09-25#5", "closure": "KNOWN-BEFORE", "actor": "owner", "evidence": "note:marquiz-ooo-transfer-registry-not-blocking-2026-09-25 (July plan)", "resolved_at": null}
+{"id": "2026-09-26#7", "closure": "UNVERIFIABLE", "actor": "agent", "evidence": "Travelmart team code, not checked", "resolved_at": null}
+{"id": "2026-09-26#8", "closure": "OPEN", "actor": "owner", "evidence": "govori billing still open", "resolved_at": null}
+{"id": "2026-09-28#9", "closure": "UNVERIFIABLE", "actor": "owner", "evidence": "no Jenkins TLS monitoring node", "resolved_at": null}
+{"id": "2026-09-29#7", "closure": "OPEN", "actor": "owner", "evidence": "note:skvo-crm-tasks-report-2026-10-01 still 0/36", "resolved_at": null}
+{"id": "2026-09-30#7", "closure": "OPEN", "actor": "owner", "evidence": "no SoT decision", "resolved_at": null}
+{"id": "2026-09-30#8", "closure": "UNVERIFIABLE", "actor": "agent", "evidence": "no parity-restore evidence found", "resolved_at": null}
