@@ -87,7 +87,7 @@ main_files=$(find "$REPO/orchestrator" "$REPO/lib" -maxdepth 2 -name '*.sh' -typ
 
 # Собираем prompt
 prompt_file=$(mktemp /tmp/introspector-prompt.XXXXXX)
-trap 'rm -f "$prompt_file"' EXIT
+trap 'rm -f "$prompt_file" "${claude_err:-}"' EXIT
 
 {
   echo "Ты — агент-интроспектор системы brain-dream (knowledge graph «сон»)."
@@ -174,8 +174,11 @@ fi
 # Real call
 log INFO "calling_sonnet"
 claude_response=""
-if ! claude_response=$(claude-pool --headless -- -p --model sonnet --max-budget-usd "$BUDGET_USD" --output-format json "$(cat "$prompt_file")" 2>/dev/null); then
-  log ERROR "claude_failed"
+claude_err=$(mktemp)
+if ! claude_response=$(claude-pool --headless -- -p --model sonnet --max-budget-usd "$BUDGET_USD" --output-format json "$(cat "$prompt_file")" 2>"$claude_err"); then
+  # Причина падения в лог: stderr и начало stdout (claude -p кладёт ошибку в JSON).
+  log ERROR "claude_failed stderr=$(tail -c 400 "$claude_err" | tr '\n"' '  ') stdout=$(printf '%s' "$claude_response" | head -c 400 | tr '\n"' '  ')"
+  rm -f "$claude_err"
   cat <<FAIL
 {"version":"1","agent_name":"$AGENT_NAME","status":"failed","duration_s":$(($(date +%s)-START_TIME)),"errors":["claude_call_failed"],"telemetry":{"llm_calls":[]}}
 FAIL
