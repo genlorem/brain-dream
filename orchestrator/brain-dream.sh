@@ -259,6 +259,8 @@ DREAM_OBSERVATIONS_CACHE_MAX_AGE_H="${DREAM_OBSERVATIONS_CACHE_MAX_AGE_H:-72}"
 LOG_FILE="$HOME/life/state/logs/brain-dream.log"
 # Переопределяется в тестах стабом; в проде всегда соседний gemini.sh.
 GEMINI_SH="${GEMINI_SH:-$ORCHESTRATOR_DIR/gemini.sh}"
+# Ворота стиля у записи (decision:ncf-style-by-audience-pipeline-skip-write-gate-ruled-out-2026-10-16).
+STYLE_GATE="${STYLE_GATE:-$ORCHESTRATOR_DIR/../tools/style_gate.py}"
 UTC_DATE="$(date -u +%F)"
 OUT_MD="$DREAM_OUT_DIR/dream-$UTC_DATE.md"
 OUT_PNG="$DREAM_OUT_DIR/dream-$UTC_DATE.png"
@@ -577,14 +579,15 @@ run_sonnet_iteration() {
 плохо: «Итог измерил качество метки, не модели.» → хорошо: «Итог измерил качество метки.»
 Перед выводом перечитай title/insight/why: оборотов «, а не», «, не …» и «(не …)» там быть не должно.
 Нужно 1-3 инсайта, каждый на отдельной строке, строго в формате:
-{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"novelty\":\"obvious|non-obvious\",\"confidence\":0.7,\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
+{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"ruled_out\":\"\",\"novelty\":\"obvious|non-obvious\",\"confidence\":0.7,\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
 
 Правила:
 - опирайся только на source_ids из контекста;
 - source_ids должны быть id нод, которые реально использованы;
 - domain поставь \"$domain_label\" или более точный домен из контекста;
 - lens поставь \"$lens_key\";
-- confidence — твоя уверенность 0.3-1.0, что инсайт точен И применим на практике (а не просто факт). Дефолт 0.7. 0.3-0.5 = гипотеза, 0.6-0.8 = вероятно, 0.9-1.0 = уверен, действие напрашивается;
+- ruled_out — что ты проверил и отбросил, с причиной, отдельным предложением («Версию про сеть отбросил: ping в норме.»); пусто, если нечего. Отброшенная версия живёт только в этом поле;
+- confidence — твоя уверенность 0.3-1.0, что инсайт точен И применим на практике; голый факт без применения — 0.3-0.5. Дефолт 0.7. 0.3-0.5 = гипотеза, 0.6-0.8 = вероятно, 0.9-1.0 = уверен, действие напрашивается;
 - insight и why пиши по-русски, конкретно и без общих советов.
 
 КОНТЕКСТ НОД:
@@ -614,6 +617,7 @@ $context"
       --arg domain "$domain_label" --arg lens "$lens_key" --argjson allowed "$allowed_ids_json" '
         select(type == "object")
         | .title = (.title // "") | .insight = (.insight // "") | .why = (.why // "")
+        | .ruled_out = (if (.ruled_out|type)=="string" then .ruled_out else "" end)
         | .novelty = (if .novelty == "obvious" or .novelty == "non-obvious" then .novelty else "non-obvious" end)
         | .source_ids = (if (.source_ids|type)=="array" then [.source_ids[]|tostring|select(($allowed|index(.))!=null)] else [] end)
         | .domain = (if (.domain|type)=="string" and (.domain|length)>0 then .domain else $domain end)
@@ -1109,7 +1113,13 @@ pick_second_cluster_index() {
 }
 
 append_candidate() {
-  local json_line="$1"
+  local json_line="$1" gated
+
+  # Ворота стиля: противопоставления в title/insight/why/ruled_out переписываются точечно до записи.
+  gated="$(printf '%s\n' "$json_line" | STYLE_GATE_SOURCE=brain-dream:candidate python3 "$STYLE_GATE" fields 2>/dev/null || true)"
+  if [[ -n "$gated" ]] && printf '%s' "$gated" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    json_line="$(printf '%s' "$gated" | jq -c .)"
+  fi
 
   {
     flock 9
@@ -1137,14 +1147,15 @@ run_generation_iteration() {
 плохо: «Итог измерил качество метки, не модели.» → хорошо: «Итог измерил качество метки.»
 Перед выводом перечитай title/insight/why: оборотов «, а не», «, не …» и «(не …)» там быть не должно.
 Нужно 1-3 инсайта, каждый на отдельной строке, строго в формате:
-{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"novelty\":\"obvious|non-obvious\",\"confidence\":0.7,\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
+{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"ruled_out\":\"\",\"novelty\":\"obvious|non-obvious\",\"confidence\":0.7,\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
 
 Правила:
 - опирайся только на source_ids из контекста;
 - source_ids должны быть id нод, которые реально использованы;
 - domain поставь \"$domain_label\" или более точный домен из контекста;
 - lens поставь \"$lens_key\";
-- confidence — твоя уверенность 0.3-1.0, что инсайт точен И применим на практике (а не просто факт). Дефолт 0.7. 0.3-0.5 = гипотеза, 0.6-0.8 = вероятно, 0.9-1.0 = уверен, действие напрашивается;
+- ruled_out — что ты проверил и отбросил, с причиной, отдельным предложением («Версию про сеть отбросил: ping в норме.»); пусто, если нечего. Отброшенная версия живёт только в этом поле;
+- confidence — твоя уверенность 0.3-1.0, что инсайт точен И применим на практике; голый факт без применения — 0.3-0.5. Дефолт 0.7. 0.3-0.5 = гипотеза, 0.6-0.8 = вероятно, 0.9-1.0 = уверен, действие напрашивается;
 - insight и why пиши по-русски, конкретно и без общих советов."
 
   if ! response="$("$GEMINI_SH" -m "${DREAM_GEMINI_MODEL:-flash}" stdin "$instruction" <<< "$context" 2>/dev/null)"; then
@@ -1168,6 +1179,7 @@ run_generation_iteration() {
         | .title = (.title // "")
         | .insight = (.insight // "")
         | .why = (.why // "")
+        | .ruled_out = (if (.ruled_out | type) == "string" then .ruled_out else "" end)
         | .novelty = (if .novelty == "obvious" or .novelty == "non-obvious" then .novelty else "non-obvious" end)
         | .source_ids = (
             if (.source_ids | type) == "array"
@@ -1549,6 +1561,7 @@ fallback_synthesis() {
     | "## " + ((.key + 1) | tostring) + ". " + .value.title + "\n\n" +
       "**Суть:** " + .value.insight + "\n\n" +
       "**Почему важно:** " + .value.why + "\n\n" +
+      (if ((.value.ruled_out // "") | length) > 0 then "**Отброшено:** " + .value.ruled_out + "\n\n" else "" end) +
       "**Предлагаемое действие:** Проверить источник, сформулировать следующий конкретный шаг и связать его с текущими планами.\n\n" +
       "**source_ids:** " + (.value.source_ids | join(", ")) + "\n\n" +
       "**Метка:** " + .value.novelty + "\n"
@@ -1565,7 +1578,7 @@ MERMAID
 }
 
 run_synthesis() {
-  local synthesis_text
+  local synthesis_text gated_text
 
   PROMPT_FILE="$(mktemp "$DREAM_OUT_DIR/.brain-dream-claude-prompt.XXXXXX")"
   register_temp_file "$PROMPT_FILE"
@@ -1612,6 +1625,8 @@ run_synthesis() {
     cat <<'PROMPT'
 Ты синтезатор. Из этих кандидатов-инсайтов собери ТОП-10 по (важность × новизна × применимость), дедупни близкие.
 Для каждого: заголовок, суть, почему важно, предлагаемое действие, ссылки на source_ids, метка obvious/non-obvious.
+Если у кандидата заполнено ruled_out — отдельная строка «**Отброшено:** …» с причиной; отброшенные версии пиши только в ней.
+Стиль: утверждения прямо, без противопоставлений и вставок «стоит отметить».
 В конце — Mermaid flowchart связей топ-10.
 Ответ — Markdown на русском.
 
@@ -1625,6 +1640,9 @@ PROMPT
   # «Argument list too long» → мгновенный фейл синтеза (нода = сырой fallback).
   if synthesis_text="$(claude-pool --headless -- -p --model "$DREAM_SONNET_MODEL" < "$PROMPT_FILE" 2>/dev/null)" \
      && [[ -n "$synthesis_text" ]]; then
+    # Ворота стиля на синтез: переписываются только предложения с противопоставлением.
+    gated_text="$(printf '%s\n' "$synthesis_text" | STYLE_GATE_SOURCE=brain-dream:synthesis python3 "$STYLE_GATE" text 2>/dev/null || true)"
+    [[ -n "$gated_text" ]] && synthesis_text="$gated_text"
     printf '%s\n' "$synthesis_text"
   else
     log "stage=synthesis event=claude_failed action=fallback_synthesis"
