@@ -12,6 +12,9 @@
 # молча не стартовали — cron отдал systemd-run «CPUQuota=200» и пустую команду):
 #   0 */6 * * * XDG_RUNTIME_DIR=/run/user/1000 flock -n /tmp/session-observer.lock systemd-run --user --quiet --wait --collect --slice=ccwork.slice --unit=session-observer-cron -p CPUQuota=200\% /home/genlorem/Projects/brain-dream/orchestrator/session-observer-cron.sh
 set -euo pipefail
+# systemd --user окружение не несёт ~/.local/bin: ворота стиля (tools/style_gate.py) зовут
+# claude-pool, и 17.10 12:00 UTC все 5 вызовов упали FileNotFoundError — находки ушли без правки.
+export PATH="$HOME/.nvm/versions/node/v22.22.2/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 
 REPO="${REPO:-$HOME/Projects/brain-dream}"
 LOG="${LOG:-$HOME/life/state/logs/session-observer.log}"
