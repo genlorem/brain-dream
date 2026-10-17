@@ -21,6 +21,7 @@ REPO="${BRAIN_DREAM_REPO:-$(cd "$AGENT_DIR/.." && pwd)}"
 DREAM_NODE_ROOT="${DREAM_NODE_ROOT:-$HOME/brain/dreams}"
 BRAIN_ROOT="${BRAIN_ROOT:-$HOME/brain}"
 INSIGHT_REGISTRY="${INSIGHT_REGISTRY:-$DREAM_NODE_ROOT/.insight-hashes.jsonl}"
+STYLE_GATE="${STYLE_GATE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/style_gate.py}"
 GEMINI_SH="$REPO/orchestrator/gemini.sh"
 
 # Финализированная сессия: mtime старше N минут (чтобы не трогать активную).
@@ -442,6 +443,17 @@ while IFS= read -r session_path; do
     # Inline secret scrub
     c_title=$(scrub_secrets "$c_title")
     c_body=$(scrub_secrets "$c_body")
+
+    # Ворота стиля (decision:ncf-style-by-audience-pipeline-skip-write-gate-ruled-out-2026-10-16):
+    # противопоставления переписывает tools/style_gate.py до хеша, сбой — текст как был.
+    if [ -f "$STYLE_GATE" ]; then
+      gated=$(jq -cn --arg t "$c_title" --arg b "$c_body" '{title:$t,body:$b}' \
+        | STYLE_GATE_FIELDS=title,body STYLE_GATE_SOURCE=session-observer:finding python3 "$STYLE_GATE" fields 2>/dev/null || true)
+      if [ -n "$gated" ] && printf '%s' "$gated" | jq -e '.title and .body' >/dev/null 2>&1; then
+        c_title=$(printf '%s' "$gated" | jq -r '.title')
+        c_body=$(printf '%s' "$gated" | jq -r '.body')
+      fi
+    fi
 
     # Level-2 dedup: content-hash
     c_hash=$(content_hash_insight "$c_title" "$c_body")
