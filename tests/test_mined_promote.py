@@ -105,6 +105,20 @@ class MinedPromoteTests(unittest.TestCase):
             candidates = mined_promote.scan_candidates(root, min_conf=0.85)
         self.assertEqual({item.id for item in candidates}, {good, deferred})
 
+    def test_deferred_candidates_rotate_behind_fresh_ones(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old = self.write_candidate(root, "old", confidence=0.99)
+            fresh = self.write_candidate(root, "fresh", confidence=0.88)
+            state = root / "promote-log" / "decisions.jsonl"
+            state.parent.mkdir()
+            state.write_text(
+                json.dumps({"id": old, "action": "defer"}) + "\n",
+                encoding="utf-8",
+            )
+            candidates = mined_promote.scan_candidates(root, min_conf=0.85)
+        self.assertEqual([item.id for item in candidates], [fresh, old])
+
     def test_links_are_filtered_to_search_result_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -147,6 +147,27 @@ def terminal_decisions(path: Path) -> set[str]:
     return result
 
 
+def defer_counts(path: Path) -> dict[str, int]:
+    """Сколько раз судья откладывал кандидата: основа ротации выборки."""
+    result: dict[str, int] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return result
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(item, dict)
+            and item.get("action") == "defer"
+            and isinstance(item.get("id"), str)
+        ):
+            result[item["id"]] = result.get(item["id"], 0) + 1
+    return result
+
+
 def scan_candidates(
     dreams_root: Path,
     min_conf: float = 0.85,
@@ -157,6 +178,7 @@ def scan_candidates(
     """Отфильтровать mined-кандидатов по тегу, confidence и state-логу."""
     state_path = decisions_path or dreams_root / "promote-log" / "decisions.jsonl"
     blocked = terminal_decisions(state_path)
+    deferrals = defer_counts(state_path)
     split = parser or frontmatter_parser()
     candidates: list[Candidate] = []
     # рекурсивно: движок раскладывает ноды по типовым подпапкам (nodes/notes/...)
@@ -191,7 +213,12 @@ def scan_candidates(
                 path=path,
             ),
         )
-    return sorted(candidates, key=lambda item: (-item.confidence, item.id))
+    # defer не блокирует: без ротации топ-N по confidence откладывается каждый
+    # день, остальные кандидаты не доходят до судьи. Реже откладывавшиеся — первыми.
+    return sorted(
+        candidates,
+        key=lambda item: (deferrals.get(item.id, 0), -item.confidence, item.id),
+    )
 
 
 def subprocess_judge(
