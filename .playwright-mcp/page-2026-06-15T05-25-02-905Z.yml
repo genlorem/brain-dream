@@ -1,0 +1,298 @@
+- generic [active] [ref=e1]:
+  - heading "ТОП-10 инсайтов · 2026-06-13" [level=1] [ref=e2]
+  - separator [ref=e3]
+  - heading "1. CLAUDE.md предписывает claude mcp add без -s user — MCP молча уходит в project-scope" [level=2] [ref=e4]:
+    - text: 1. CLAUDE.md предписывает
+    - code [ref=e5]: claude mcp add
+    - text: без
+    - code [ref=e6]: "-s user"
+    - text: — MCP молча уходит в project-scope
+  - paragraph [ref=e7]:
+    - strong [ref=e8]: Суть.
+    - text: "Инструкция в CLAUDE.md:"
+    - code [ref=e9]: claude mcp add <name> -- <command>
+    - text: . Без флага
+    - code [ref=e10]: "-s user"
+    - text: сервер скоупится на текущий проект, а не на все сессии. Lesson:claude-mcp-add-default-scope-local зафиксирован после реального инцидента (brain ушёл из user-scope), но CLAUDE.md не обновлён — противоречие живёт в продакшн-инструкции прямо сейчас.
+  - paragraph [ref=e11]:
+    - strong [ref=e12]: Почему важно.
+    - text: Каждое следующее
+    - code [ref=e13]: claude mcp add
+    - text: по инструкции из CLAUDE.md будет недоступно в других проектах без явного сигнала об ошибке. Инструкция создана чтобы предотвратить ручное редактирование конфигов, но не закрывает проблему scope.
+  - paragraph [ref=e14]:
+    - strong [ref=e15]: Действие.
+    - text: Добавить
+    - code [ref=e16]: "-s user"
+    - text: "в пример команды в CLAUDE.md прямо сейчас. Строка:"
+    - code [ref=e17]: claude mcp add -s user <name> -- <command>
+    - text: .
+  - paragraph [ref=e18]:
+    - strong [ref=e19]: "Sources:"
+    - code [ref=e20]: lesson:claude-mcp-add-default-scope-local
+    - text: "|"
+    - strong [ref=e21]: non-obvious
+  - separator [ref=e22]
+  - 'heading "2. Brain MCP stdio→http: RAM растёт O(n) с числом сессий, а не O(1)" [level=2] [ref=e23]'
+  - paragraph [ref=e24]:
+    - strong [ref=e25]: Суть.
+    - text: При stdio-транспорте embedding-модель (~1 ГБ) загружается в каждую CC-сессию отдельно. На 9 сессиях — ~2.8 ГБ. Единый http-демон держит ~1.1 ГБ на всех. Экономия линейна с числом сессий.
+  - paragraph [ref=e26]:
+    - strong [ref=e27]: Почему важно.
+    - text: MCP-серверы воспринимаются как лёгкие обёртки; факт что embedding-модель = отдельный процесс на сессию всплывает только после OOM. Это не гипотетический риск — VPS уже получал OOM-hardening без знания root cause.
+  - paragraph [ref=e28]:
+    - strong [ref=e29]: Действие.
+    - text: Перевести brain MCP на http-демон по процедуре
+    - code [ref=e30]: procedure:brain-http-daemon
+    - text: . Проверить, покрывает ли
+    - code [ref=e31]: decision:2026-06-04-vps-oom-hardening
+    - text: ONNX-специфичные меры (arena_extend_strategy), или только симптом (общий RSS).
+  - paragraph [ref=e32]:
+    - strong [ref=e33]: "Sources:"
+    - code [ref=e34]: procedure:brain-http-daemon
+    - text: "|"
+    - strong [ref=e35]: non-obvious
+  - separator [ref=e36]
+  - heading "3. Выход Балина блокирует дивиденды Андрея — окно для fix открыто пока ИП активно" [level=2] [ref=e37]
+  - paragraph [ref=e38]:
+    - strong [ref=e39]: Суть.
+    - text: Андрей получает свои 2.5% не напрямую, а через ИП Балина под видом «услуг». Когда Балин закроет ИП при выходе — единственный механизм выплат исчезнет, хотя доля Андрея остаётся. Два события (выход учредителя и закрытие ИП) могут произойти в разное время — проблема возникает именно при закрытии ИП, не раньше.
+  - paragraph [ref=e40]:
+    - strong [ref=e41]: Почему важно.
+    - text: "Кипрскую юрисдикцию перенесли в КЗ проактивно, до блокировки. Здесь — реактивная ситуация: канал уже описан как «блокер», но нового механизма нет. Пока ИП Балина работает — есть окно."
+  - paragraph [ref=e42]:
+    - strong [ref=e43]: Действие.
+    - text: Закрыть новый маршрут выплат Андрею (прямой договор ГПХ, КЗ-сущность или иной) до закрытия ИП Балина. Зафиксировать решение как
+    - code [ref=e44]: decision:marquiz/andrei-new-payout-route
+    - text: .
+  - paragraph [ref=e45]:
+    - strong [ref=e46]: "Sources:"
+    - code [ref=e47]: decision:marquiz/andrei-payouts
+    - text: ","
+    - code [ref=e48]: decision:marquiz/andrei-balin-option
+    - text: "|"
+    - strong [ref=e49]: non-obvious
+  - separator [ref=e50]
+  - 'heading "4. Session manager: кнопка ↺ в UI вела на /restart (kill+new), а не на /cc-restart (resume)" [level=2] [ref=e51]':
+    - text: "4. Session manager: кнопка ↺ в UI вела на"
+    - code [ref=e52]: /restart
+    - text: (kill+new), а не на
+    - code [ref=e53]: /cc-restart
+    - text: (resume)
+  - paragraph [ref=e54]:
+    - strong [ref=e55]: Суть.
+    - text: До 2026-06-12 единственная кнопка рестарта в UI вела на
+    - code [ref=e56]: /restart
+    - text: — kill + новая сессия без resume. Каждый клик «рестарт» для применения MCP/upgrade создавал новую сессию, осиротевший JSONL и потерю всего накопленного контекста. Два эндпоинта с похожими именами, но принципиально разной семантикой — UI экспонировал только деструктивный.
+  - paragraph [ref=e57]:
+    - strong [ref=e58]: Почему важно.
+    - text: "Пользователь, кликая «рестарт» из привычки, незаметно терял весь контекст. Урок зафиксирован, но не проверено: исправлена ли кнопка и добавлен ли явный лейбл («Resume» vs «New session»)."
+  - paragraph [ref=e59]:
+    - strong [ref=e60]: Действие.
+    - text: "Проверить текущий UI session-manager: кнопка ↺ должна вести на"
+    - code [ref=e61]: /cc-restart
+    - text: ", а"
+    - code [ref=e62]: /restart
+    - text: (деструктивный) — требовать явного подтверждения или быть скрыт.
+  - paragraph [ref=e63]:
+    - strong [ref=e64]: "Sources:"
+    - code [ref=e65]: lesson:session-manager-restart-vs-cc-restart
+    - text: "|"
+    - strong [ref=e66]: non-obvious
+  - separator [ref=e67]
+  - 'heading "5. МойСклад: один токен на 4+ сервиса — каскадное падение без процедуры ротации" [level=2] [ref=e68]'
+  - paragraph [ref=e69]:
+    - strong [ref=e70]: Суть.
+    - text: synapse-prod, skvo-fabric, skvo-controller, cdek-bot используют один токен ИП Балачков в МС. 49 зависших вебхуков TopSeller/mpsklad висели на том же аккаунте незамеченными — обнаружены только через угрозу МС автоотключить их. Блокировка/ротация токена или rate-limit немедленно кладёт все сервисы без изолированных ошибок.
+  - paragraph [ref=e71]:
+    - strong [ref=e72]: Почему важно.
+    - text: МС уже грозил авто-отключением за таймауты. Компрометация или плановая ротация — единственный вектор для каскадного падения четырёх несвязанных сервисов. Ни один из них не мониторит статус аккаунта независимо.
+  - paragraph [ref=e73]:
+    - strong [ref=e74]: Действие.
+    - text: Завести
+    - code [ref=e75]: procedure:moysklad-token-rotation
+    - text: с шагами изоляции токенов по сервисам и планом действий при компрометации. Добавить health-check пинг МС-аккаунта в мониторинг.
+  - paragraph [ref=e76]:
+    - strong [ref=e77]: "Sources:"
+    - code [ref=e78]: decision:moysklad-topseller-webhooks-decommission
+    - text: "|"
+    - strong [ref=e79]: non-obvious
+  - separator [ref=e80]
+  - heading "6. Playwright MCP накапливает браузеры в долгоживущих сессиях — reaper написан, но не задеплоен" [level=2] [ref=e81]
+  - paragraph [ref=e82]:
+    - strong [ref=e83]: Суть.
+    - text: Браузер привязан к CC-сессии, а не к use-case.
+    - code [ref=e84]: browser_close
+    - text: никто не вызывает → 52 chrome-процесса и +3.6 ГБ профилей до обнаружения. Процедура гашения idle-браузеров создана после инцидента 2026-06-10, но в Brain нет узла, подтверждающего что reaper реально запущен как cron или systemd-таймер на VPS.
+  - paragraph [ref=e85]:
+    - strong [ref=e86]: Почему важно.
+    - text: Без задеплоенного reaper'а накопление повторится. OOM-hardening снижает риск, но не устраняет первопричину. Дисковый рост (+3.6 ГБ профилей) — второй скрытый вектор, который заметят позже RAM.
+  - paragraph [ref=e87]:
+    - strong [ref=e88]: Действие.
+    - text: Задеплоить
+    - code [ref=e89]: procedure:playwright-mcp-reaper
+    - text: как cron/systemd-таймер на VPS. Создать ноду
+    - code [ref=e90]: event:playwright-reaper-deployed-<date>
+    - text: после деплоя.
+  - paragraph [ref=e91]:
+    - strong [ref=e92]: "Sources:"
+    - code [ref=e93]: procedure:playwright-mcp-reaper
+    - text: ","
+    - code [ref=e94]: decision:2026-06-04-vps-oom-hardening
+    - text: "|"
+    - strong [ref=e95]: non-obvious
+  - separator [ref=e96]
+  - heading "7. АстанаХаб 0% недостижим — весь клиентский оборот идёт мимо КЗ-юрлица" [level=2] [ref=e97]
+  - paragraph [ref=e98]:
+    - strong [ref=e99]: Суть.
+    - text: "Цель кипрской миграции — нулевой налог через АстанаХаб КЗ. Но весь клиентский оборот Marquiz идёт на ИП Балачков (РФ-юрисдикция). КЗ-юрлицо получит 0% только со своих доходов — а основной поток мимо него. Плюс: PayPro-поток юридически принадлежит ТОО, единственным учредителем которого является Геннадий — наёмный менеджер без доли в РФ-ООО. Если Геннадий уходит — международный биллинг в руинах без механизма перехода."
+  - paragraph [ref=e100]:
+    - strong [ref=e101]: Почему важно.
+    - text: "Два решения (миграция в КЗ и лицензионная схема) приняты независимо и создают структурное противоречие: налоговая экономия мотивировала миграцию, но реальная ставка не меняется пока права на ПО и клиентские платежи не перенесены на КЗ-сущность."
+  - paragraph [ref=e102]:
+    - strong [ref=e103]: Действие.
+    - text: "Проверить с юристом: при каких условиях КЗ-юрлицо получает реальный оборот, а не транзитный. Зафиксировать как"
+    - code [ref=e104]: decision:marquiz/kz-revenue-routing-plan
+    - text: .
+  - paragraph [ref=e105]:
+    - strong [ref=e106]: "Sources:"
+    - code [ref=e107]: decision:marquiz/cyprus-to-kz-migration
+    - text: ","
+    - code [ref=e108]: decision:marquiz/licensing-ip-scheme
+    - text: ","
+    - code [ref=e109]: decision:marquiz/too-kz-separate-entity
+    - text: ","
+    - code [ref=e110]: decision:marquiz/paypro-migration-done
+    - text: "|"
+    - strong [ref=e111]: non-obvious
+  - separator [ref=e112]
+  - 'heading "8. Govori: LS-биллинг несовместим с IAP + покупатели видят «HanziHunt» вместо «Govori»" [level=2] [ref=e113]'
+  - paragraph [ref=e114]:
+    - strong [ref=e115]: Суть.
+    - text: (А) tokens.py построен вокруг LS License Key. Apple IAP и Play Billing не выдают license key — при выходе в стор rebind/revoke логика сломается. (Б) Продукт «Govori month» продаётся через LS-магазин HanziHunt (id 340506). Покупатель видит в выписке «HanziHunt», а не «Govori» — сломанное доверие и потенциальное нарушение ToS LS.
+  - paragraph [ref=e116]:
+    - strong [ref=e117]: Почему важно.
+    - text: Оба решения приняты независимо, конфликт невидим пока нет стор-публикации. Phase 2 (dispatch_command/do) строится поверх нерешённого billing-блокера, что заставит адаптировать Phase 2-фичи под два payment path после реализации.
+  - paragraph [ref=e118]:
+    - strong [ref=e119]: Действие.
+    - text: "(А) Создать отдельный IAP-путь в tokens.py или принять решение: store-версия = отдельный billing бэкенд. (Б) Переименовать LS-магазин на «Govori» до публикации в стор."
+  - paragraph [ref=e120]:
+    - strong [ref=e121]: "Sources:"
+    - code [ref=e122]: decision:govori-store-billing-open
+    - text: ","
+    - code [ref=e123]: decision:govori-per-device-tokens
+    - text: ","
+    - code [ref=e124]: decision:govori-lemonsqueezy-mor
+    - text: ","
+    - code [ref=e125]: event:govori-relay-live
+    - text: "|"
+    - strong [ref=e126]: non-obvious
+  - separator [ref=e127]
+  - 'heading "9. SKVO: аналитический backbone без владельца решений + 90 дней данных без сезонности" [level=2] [ref=e128]'
+  - paragraph [ref=e129]:
+    - strong [ref=e130]: Суть.
+    - text: "synapse работает (заказы, выручка, остатки WB/Ozon/YM, 90-дневное окно), но маркетинг-лид — «главный рычаг 2026» — не нанят и роль не описана. Одновременно 90 дней захватывают только Q4-Q1 (пик продаж). Стратегические решения по 280 SKU принимаются без year-over-year сравнения: невозможно отличить сезонный всплеск от реального роста."
+  - paragraph [ref=e131]:
+    - strong [ref=e132]: Почему важно.
+    - text: 90-дневное скользящее окно ротируется без применения. Маркетплейсы штрафуют за низкую оборачиваемость, а данных для ABC-анализа уже достаточно для быстрого старта. Без лида инфраструктура накапливает данные впустую.
+  - paragraph [ref=e133]:
+    - strong [ref=e134]: Действие.
+    - text: "(А) Запустить ABC-анализ: один SQL-запрос"
+    - code [ref=e135]: net_payout/SKU
+    - text: из synapse → заморозить bottom-50% позиций в следующем производственном цикле. (Б) Запросить исторические выгрузки из API маркетплейсов (Ozon/WB/ЯМ) прямо сейчас — архивировать снапшоты пока window не вырос сам.
+  - paragraph [ref=e136]:
+    - strong [ref=e137]: "Sources:"
+    - code [ref=e138]: note:skvo/marketing-lead-gap
+    - text: ","
+    - code [ref=e139]: note:skvo/data-backbone
+    - text: ","
+    - code [ref=e140]: note:skvo/strategy-data-map
+    - text: "|"
+    - strong [ref=e141]: non-obvious
+    - text: (сезонность),
+    - strong [ref=e142]: obvious
+    - text: (роль лида)
+  - separator [ref=e143]
+  - heading "10. Флоу «ещё один заказ» для юрлиц системно сломан — два независимых бага, ноль регрессионных сценариев" [level=2] [ref=e144]
+  - paragraph [ref=e145]:
+    - strong [ref=e146]: Суть.
+    - text: "VIP-7063 (предзаполнение не подтягивается без ручного нажатия) и VIP-7660 (заказ нельзя оформить при совпадающих адресах) — оба в одном флоу: повторный заказ юрлица. Найдены разными людьми в разное время → флоу никогда не проходили end-to-end для юрлиц. Плюс: все юрлицо-баги воспроизводятся только через один ручной тест-аккаунт"
+    - code [ref=e147]: sempertuarn@proton.me
+    - text: — единственная точка входа для этого класса тестов.
+  - paragraph [ref=e148]:
+    - strong [ref=e149]: Почему важно.
+    - text: Повторный заказ — максимально конверсионный путь (пользователь уже доверяет сервису). Системная поломка здесь = прямые потери. Зависимость от одного аккаунта = новые юрлицо-баги будут обнаруживаться случайно у клиентов.
+  - paragraph [ref=e150]:
+    - strong [ref=e151]: Действие.
+    - text: Создать регрессионный сценарий для флоу «юрлицо → повторный заказ» в чеклисте QA. Задокументировать конфигурацию тест-аккаунта в Tracker, не в головах.
+  - paragraph [ref=e152]:
+    - strong [ref=e153]: "Sources:"
+    - code [ref=e154]: task:VIP-7063
+    - text: ","
+    - code [ref=e155]: task:VIP-7660
+    - text: ","
+    - code [ref=e156]: task:VIP-7314
+    - text: "|"
+    - strong [ref=e157]: non-obvious
+  - separator [ref=e158]
+  - 'heading "Mermaid: связи между ТОП-10" [level=2] [ref=e159]'
+  - generic [ref=e160]: "flowchart TD INS1[\"#1 CLAUDE.md MCP scope\\n(silent project-scope)\"] INS2[\"#2 Brain MCP stdio→http\\n(RAM O(n)→O(1))\"] INS3[\"#3 Балин выход →\\nАндрей без дивидендов\"] INS4[\"#4 Session manager ↺\\n= kill, не resume\"] INS5[\"#5 МойСклад: 1 токен\\n= каскадное падение\"] INS6[\"#6 Playwright: браузеры\\nкопятся, reaper не деплоен\"] INS7[\"#7 АстанаХаб 0%\\nнедостижим\"] INS8[\"#8 Govori: LS vs IAP\\n+ HanziHunt brand\"] INS9[\"#9 SKVO: нет лида\\n+ 90 дней без сезонности\"] INS10[\"#10 Юрлица: флоу\\nсломан, нет регрессии\"] INS1 -->|\"scope влияет на\\nустановку Brain\"| INS2 INS2 -->|\"оба потребляют RAM\\nна одном VPS\"| INS6 INS4 -->|\"оба: CC-сессии\\nтеряют контекст\"| INS2 INS1 -.->|\"паттерн: дефолт\\nвыглядит верно, но нет\"| INS4 INS3 -->|\"оба следствия\\nмиграции Marquiz в КЗ\"| INS7 INS3 -.->|\"оба: один канал\\nвыплат = блокер\"| INS5 INS7 -->|\"оба: billing-решения\\nне отражают юр-структуру\"| INS8 INS9 -->|\"оба: инфра готова,\\nиспользование не систематизировано\"| INS10 INS5 -.->|\"один токен / один аккаунт\\n= single point of failure\"| INS10"
+  - separator [ref=e161]
+  - paragraph [ref=e162]:
+    - strong [ref=e163]: "Итог по доменам:"
+  - table [ref=e164]:
+    - rowgroup [ref=e165]:
+      - row "# Домен Приоритет Тип" [ref=e166]:
+        - columnheader "#" [ref=e167]
+        - columnheader "Домен" [ref=e168]
+        - columnheader "Приоритет" [ref=e169]
+        - columnheader "Тип" [ref=e170]
+      - row "1 Tooling (CLAUDE.md) 🔴 Срочно Исправление" [ref=e171]:
+        - cell "1" [ref=e172]
+        - cell "Tooling (CLAUDE.md)" [ref=e173]
+        - cell "🔴 Срочно" [ref=e174]
+        - cell "Исправление" [ref=e175]
+      - row "2 Infra (VPS/RAM) 🟠 Высокий Оптимизация" [ref=e176]:
+        - cell "2" [ref=e177]
+        - cell "Infra (VPS/RAM)" [ref=e178]
+        - cell "🟠 Высокий" [ref=e179]
+        - cell "Оптимизация" [ref=e180]
+      - row "3 Marquiz Legal/Finance 🔴 Time-sensitive Действие" [ref=e181]:
+        - cell "3" [ref=e182]
+        - cell "Marquiz Legal/Finance" [ref=e183]
+        - cell "🔴 Time-sensitive" [ref=e184]
+        - cell "Действие" [ref=e185]
+      - row "4 Infra (sessions) 🟠 Высокий Проверка" [ref=e186]:
+        - cell "4" [ref=e187]
+        - cell "Infra (sessions)" [ref=e188]
+        - cell "🟠 Высокий" [ref=e189]
+        - cell "Проверка" [ref=e190]
+      - row "5 Infra (МойСклад) 🟠 Высокий Процедура" [ref=e191]:
+        - cell "5" [ref=e192]
+        - cell "Infra (МойСклад)" [ref=e193]
+        - cell "🟠 Высокий" [ref=e194]
+        - cell "Процедура" [ref=e195]
+      - row "6 Infra (Playwright) 🟠 Высокий Деплой" [ref=e196]:
+        - cell "6" [ref=e197]
+        - cell "Infra (Playwright)" [ref=e198]
+        - cell "🟠 Высокий" [ref=e199]
+        - cell "Деплой" [ref=e200]
+      - row "7 Marquiz Strategy 🟡 Средний Архитектура" [ref=e201]:
+        - cell "7" [ref=e202]
+        - cell "Marquiz Strategy" [ref=e203]
+        - cell "🟡 Средний" [ref=e204]
+        - cell "Архитектура" [ref=e205]
+      - row "8 Govori Product 🟠 Высокий Архитектура" [ref=e206]:
+        - cell "8" [ref=e207]
+        - cell "Govori Product" [ref=e208]
+        - cell "🟠 Высокий" [ref=e209]
+        - cell "Архитектура" [ref=e210]
+      - row "9 SKVO Business 🟡 Средний Решение + анализ" [ref=e211]:
+        - cell "9" [ref=e212]
+        - cell "SKVO Business" [ref=e213]
+        - cell "🟡 Средний" [ref=e214]
+        - cell "Решение + анализ" [ref=e215]
+      - row "10 Travelmart QA 🟡 Средний Процесс" [ref=e216]:
+        - cell "10" [ref=e217]
+        - cell "Travelmart QA" [ref=e218]
+        - cell "🟡 Средний" [ref=e219]
+        - cell "Процесс" [ref=e220]
