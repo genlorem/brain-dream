@@ -1,0 +1,130 @@
+{"key": "2026-10-19#5", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "новый договор/канал — юр. шаг владельца"}
+{"key": "2026-10-13#5", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правка скрипта"}
+{"key": "2026-10-08#9", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "сверка мест использования в базе"}
+{"key": "2026-10-08#10", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "дописать карту и реестр сроков"}
+{"key": "2026-10-09#4", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "защита ветки и CI"}
+{"key": "2026-10-12#10", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "завести decision-ноду"}
+{"key": "2026-10-09#7", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "завести задачу/коммент в командном трекере"}
+{"key": "2026-10-16#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "оформить полис"}
+{"key": "2026-10-16#9", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правка кода"}
+{"key": "2026-10-13#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "разделить ключи в пайплайне"}
+{"key": "2026-10-14#4", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "построить алерт"}
+{"key": "2026-10-13#10", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "резервный путь логина агентом или замена диска владельцем"}
+{"key": "2026-10-21#6", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "замена на поле в коде, но решение команды"}
+{"key": "2026-10-14#2", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "развести сервисы/резервный транспорт"}
+{"key": "2026-10-18#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "рефакторинг"}
+{"key": "2026-10-10#2", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "юр. ревизия оферты и денежного потока"}
+{"key": "2026-10-18#2", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "отдельная индексация в коде"}
+{"key": "2026-10-20#9", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "реестр сроков и сетевое ограничение"}
+{"key": "2026-10-20#8", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "закрепить процедуру"}
+{"key": "2026-10-13#9", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "хвост про выплаты партнёру тянет к делу про ИП"}
+{"key": "2026-10-21#2", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "уточнить у родственника или оформить полис"}
+{"key": "2026-10-16#2", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "завести класс и общий фикс"}
+{"key": "2026-10-10#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "нужен человек с устройством"}
+{"key": "2026-10-10#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "пометить ответ в коде"}
+{"key": "2026-10-20#6", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "оформить агента, но командный контур"}
+{"key": "2026-10-11#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "продлить полис"}
+{"key": "2026-10-09#2", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "закрепить гейт и пробник"}
+{"key": "2026-10-11#2", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "подписание договора"}
+{"key": "2026-10-09#8", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "договориться и уточнить — владелец"}
+{"key": "2026-10-15#2", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "пересмотр оферты"}
+{"key": "2026-10-12#6", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "развести треки и снять enrollment — продуктовый выбор владельца"}
+{"key": "2026-10-20#1", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "выбрать и выключить один — обратимо, но выбор"}
+{"key": "2026-10-20#5", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "крон на возврат агентом, раздача тестерам — людям"}
+{"key": "2026-10-16#7", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "канал выплат — владелец"}
+{"key": "2026-10-08#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "продлить"}
+{"key": "2026-10-20#2", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "буст — расход денег, снятие блокера в synapse — агент"}
+{"key": "2026-10-21#3", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "проверить правила по API/кабинету"}
+{"key": "2026-10-19#9", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "промоут — человек-гейт по намерению"}
+{"key": "2026-10-09#3", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "решить выбор биллинга — продукт"}
+{"key": "2026-10-08#4", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "решение по каналу"}
+{"key": "2026-10-14#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "запуск канала продаж — бизнес-выбор"}
+{"key": "2026-10-12#8", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "взять в спринт — команда"}
+{"key": "2026-10-19#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "продлить"}
+{"key": "2026-10-19#10", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "tenant id в коде"}
+{"key": "2026-10-10#9", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "конфиг-таблица в коде"}
+{"key": "2026-10-12#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "закоммитить скрипт, исключить сигнал"}
+{"key": "2026-10-08#6", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "ключ в пайплайн агентом, но суть — начать продавать"}
+{"key": "2026-10-13#2", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "действие пустое, дописать файл"}
+{"key": "2026-10-18#3", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правка регекса"}
+{"key": "2026-10-19#7", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "план перехода прав или договор — юр."}
+{"key": "2026-10-12#9", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правило в чеклист ревью"}
+{"key": "2026-10-10#8", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "проверка причины и блок"}
+{"key": "2026-10-16#6", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "оферта и счета — юр."}
+{"key": "2026-10-19#8", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "поставить хук"}
+{"key": "2026-10-15#10", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "durable-журнал"}
+{"key": "2026-10-11#9", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "код"}
+{"key": "2026-10-21#9", "label": "watch", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "действие — практика на будущее"}
+{"key": "2026-10-09#10", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "закрепить прогон"}
+{"key": "2026-10-08#2", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "записать procedure-узел"}
+{"key": "2026-10-11#8", "label": "watch", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правило для будущих вотчдогов без артефакта"}
+{"key": "2026-10-10#6", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "расширить конфиг и проверить в эмуляторе"}
+{"key": "2026-10-14#10", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "фильтры в код"}
+{"key": "2026-10-19#3", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правка списка"}
+{"key": "2026-10-16#3", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "нужен человек с телефоном"}
+{"key": "2026-10-15#8", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "продать знакомым — люди"}
+{"key": "2026-10-21#1", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "развести по хостам агентом или сузить токен владельцем"}
+{"key": "2026-10-13#3", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "обновить ветку"}
+{"key": "2026-10-14#7", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "перепланировать свою задачу с командой"}
+{"key": "2026-10-11#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "грепнуть и чек-лист"}
+{"key": "2026-10-14#5", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "ревизия сценариев и контроллеров"}
+{"key": "2026-10-11#3", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "отправка человеку — владелец"}
+{"key": "2026-10-18#8", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "периодическая проверка агентом, промоут решения — владелец"}
+{"key": "2026-10-08#5", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "закрепить прогон перед выплатой"}
+{"key": "2026-10-14#9", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "человек"}
+{"key": "2026-10-12#4", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "реальный тестовый платёж — деньги"}
+{"key": "2026-10-19#4", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "сверить нормы скилла"}
+{"key": "2026-10-19#6", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "проработать с юристом"}
+{"key": "2026-10-16#5", "label": "watch", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правило на будущее без артефакта"}
+{"key": "2026-10-20#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "обобщить правило в коде"}
+{"key": "2026-10-21#10", "label": "watch", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "практика для будущих эмуляций без артефакта"}
+{"key": "2026-10-09#9", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "звонок страховщику"}
+{"key": "2026-10-14#6", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "PR-гейт"}
+{"key": "2026-10-18#9", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "согласовать механизм"}
+{"key": "2026-10-13#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "человек"}
+{"key": "2026-10-18#6", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "PR/merge-флоу"}
+{"key": "2026-10-18#10", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "развести по хостам"}
+{"key": "2026-10-12#3", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "поправить ссылку и пометку в ноде"}
+{"key": "2026-10-21#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "крон с алертом"}
+{"key": "2026-10-12#2", "label": "watch", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "действие за обрезом 600 симв., видна только констатация"}
+{"key": "2026-10-21#4", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "сублицензия или оферта — юр."}
+{"key": "2026-10-08#8", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "PR-гейт"}
+{"key": "2026-10-15#3", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "новый канал выплат — владелец"}
+{"key": "2026-10-14#8", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "повторное обращение к контрагенту"}
+{"key": "2026-10-15#5", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "перепрогон агентом, само решение о формате — возможно владельца"}
+{"key": "2026-10-09#5", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правка по классу"}
+{"key": "2026-10-21#5", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "настройка в аккаунте биржи с деньгами"}
+{"key": "2026-10-10#5", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "проверить/оформить"}
+{"key": "2026-10-13#4", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "автогейт на смене статуса"}
+{"key": "2026-10-11#10", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "перевыпуск под аккаунтом владельца"}
+{"key": "2026-10-11#4", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "сверка в банке"}
+{"key": "2026-10-15#6", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "перевыпуск токена"}
+{"key": "2026-10-08#3", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "оформить договор или сменить сторону"}
+{"key": "2026-10-15#4", "label": "agent", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "маркер в поиске агентом, гейт — человек"}
+{"key": "2026-10-20#10", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "человек"}
+{"key": "2026-10-18#1", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "подписка на события в коде"}
+{"key": "2026-10-13#6", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "спланировать двухшаговую миграцию"}
+{"key": "2026-10-18#4", "label": "watch", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "действие за обрезом 600"}
+{"key": "2026-10-16#8", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "закрыть решение — продукт"}
+{"key": "2026-10-15#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "продлить онлайн"}
+{"key": "2026-10-10#3", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "ротация и rate-limit"}
+{"key": "2026-10-15#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правило в коде синка"}
+{"key": "2026-10-12#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "продлить"}
+{"key": "2026-10-21#8", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "расширить регекс"}
+{"key": "2026-10-11#5", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "агентский договор — юр."}
+{"key": "2026-10-10#10", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "decision-узел и общий критерий"}
+{"key": "2026-10-09#1", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "лицензия или оферта — юр."}
+{"key": "2026-10-20#4", "label": "watch", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "пробник для любого вотчдога — практика без артефакта"}
+{"key": "2026-10-19#2", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "налоговая подача и пересчёт"}
+{"key": "2026-10-12#5", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "правка title/meta сайта"}
+{"key": "2026-10-20#3", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "промоут решения — человек-гейт"}
+{"key": "2026-10-16#4", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "пересмотр владельцем"}
+{"key": "2026-10-18#5", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "группировка в коде"}
+{"key": "2026-10-09#6", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "проверить хуки на чужие пути"}
+{"key": "2026-10-16#10", "label": "owner", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "уточнить у владельца задачи — люди"}
+{"key": "2026-10-10#4", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "обязательный тикет+ревью — договорённость с командой"}
+{"key": "2026-10-13#8", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "расширить getBatch"}
+{"key": "2026-10-15#9", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "пересмотреть критерий или стоп shadow"}
+{"key": "2026-10-08#7", "label": "agent", "unsure": false, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "title/meta"}
+{"key": "2026-10-14#3", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "пометка агентом, канал — владелец"}
+{"key": "2026-10-11#6", "label": "owner", "unsure": true, "by": "jev-truth-labeler", "at": "2026-10-22", "blind": true, "sheet": "dream-cases-20261022", "why": "ценовое решение, хотя промо частично делегированы агентам"}
