@@ -1621,7 +1621,21 @@ run_synthesis() {
     _candidates_for_prompt="$_base_input"
   fi
 
+  # Открытые дела журнала сна (dream-v2.md §3 шаг 1, §12): без них 67 % топа — пересказ известных дел.
+  local _open_cases=""
+  if [[ "${DREAM_CASES_MODE:-shadow}" != "off" ]]; then
+    _open_cases="$(python3 "$BRAIN_DREAM_REPO/tools/dream-cases.py" open-list --limit 40 2>/dev/null || true)"
+    log "stage=synthesis event=open_cases n=$(printf '%s' "$_open_cases" | grep -c '^- ' || true)"
+  fi
+
   {
+    if [[ -n "$_open_cases" ]]; then
+      cat <<'PROMPT'
+Открытые дела — эти проблемы уже известны и ведутся (заголовок · с какой даты · состояние · последний факт).
+Кандидат, который пересказывает открытое дело без нового факта, в ТОП не бери. Кандидат с новым фактом по открытому делу бери, первой фразой сути назови новый факт.
+PROMPT
+      printf '%s\n\n' "$_open_cases"
+    fi
     cat <<'PROMPT'
 Ты синтезатор. Из этих кандидатов-инсайтов собери ТОП-10 по (важность × новизна × применимость), дедупни близкие.
 Для каждого: заголовок, суть, почему важно, предлагаемое действие, ссылки на source_ids, метка obvious/non-obvious.

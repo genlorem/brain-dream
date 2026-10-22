@@ -300,3 +300,35 @@ introspector оставить: его предложения — те же де�
 5. Причину отказа Sonnet (`claude_failed`) писать в лог, как у introspector (§6.2).
 
 Решение о фазе 3 — карточка владельцу `brain-dream-v2-phase3-2026-10-22`.
+
+## 13. Фаза 3 (решение владельца 22.10, `decision:brain-dream-v2-phase3-on-with-revision-thresholds-2026-10-22`)
+
+Карточка `brain-dream-v2-phase3-2026-10-22`, вариант A. Что сделано:
+
+| Часть | Где | Как |
+|---|---|---|
+| Пороги | `tools/dream-cases.py` | `T_CASE` 0,7; новое дело: `p(agent) ≥ 0,9` → спарк, `p(watch) ≥ 0,5` или нет проверки → watch, иначе карточка |
+| Карточка | `send_card` | мост digest-bot `POST /secretary-card` (`DREAM_CARD_BRIDGE`, по умолчанию `http://de-vps:3019`), `cardId` = `dream` + 11 hex от id дела, без звука; мост не ответил — `~/bin/tg-notify` без кнопок; ≤ 3 за ночь |
+| Ответ кнопки | session-manager `src/handlers/dream-cards.ts` (`b664b15b`) | перехват `POST /api/secretary/duty/answer` по `cardId` сна → `~/brain/dreams/.cases/answers.jsonl`; сон свёртывает: «Принял» → `close`, «Это шум» → `dropped`, «Сделай задачу» → спарк в ближайшую ночь вне очереди |
+| Спарк | `spawn_spark` | `spark.sh --project brain-dream --name dream-<дело> --model sonnet --effort medium --task-file`; ТЗ: проверить, что проблема жива, соло-репо — ветка `dream/<дело>` и PR без мержа, командные репо и дела владельца — отчёт; итог — `dream-cases.py outcome`; ≤ 2 за ночь, второй спарк по тому же делу не поднимается |
+| Итог спарка | `dream-cases.py outcome --result pr\|done\|report\|noise` | `pr` → `verifying` (ночная проверка: PR смержен → `close`, закрыт без мержа → `dropped`), `done` → `close`, `report` → карточка владельцу, `noise` → `dropped` |
+| Открытые дела в синтезе | `orchestrator/brain-dream.sh`, `dream-cases.py open-list` | 40 открытых дел строкой перед кандидатами; пересказ без нового факта в топ не берётся |
+| Ключи C1..C5 | событие находки, поле `cands` | ревизия больше не восстанавливает их `reconstruct.py` |
+
+Порядок включения: ночь 22→23.10 — shadow на новой версии (пороги и синтез с делами), утром
+23.10 крон session-manager сверяет ночь и переключает `DREAM_CASES_MODE=on` в строке крона
+`dream-night-check.sh`. Откат — `DREAM_CASES_MODE=shadow` там же.
+
+Известное: подпись после нажатия «Сделай задачу» в Telegram говорит «Передано дежурному
+секретаря» — текст моста общий с секретарём (`bridge.py`), дело при этом уходит спарку сна.
+
+**Ревизия фазы 3 — 05.11.2026** (крон session-manager). Критерии:
+
+| Что | Порог | Откуда |
+|---|---|---|
+| Доля повторов в топе (склейки / находки) | ≤ 30 % (было 67 %) | `events.jsonl`, `merge` / находки |
+| Карточек в сутки | ≤ 3, «Это шум» ≤ 20 % | события `card`, `answer` |
+| Спарки с итогом `outcome` | ≥ 80 % поднятых | `spawn` против `verifying/close/escalate/dropped` с `via: spark` |
+| Спарк на деле владельца (`report` по причине «нужен владелец») | ≤ 10 % | итоги спарков |
+| Закрыто дел за 2 недели | ≥ 5 (было 0) | `close` |
+| Ночи без журнала без алерта | 0 | `metrics/`, лог night-check |

@@ -38,13 +38,25 @@ sys.path.insert(0, f"{BRAIN}/engine")
 
 # Пороги — до ревизии кривых (§4); в журнал пишутся сырые вероятности.
 T_KNOWN = float(os.environ.get("DREAM_CASES_T_KNOWN", "0.8"))
-T_CASE = float(os.environ.get("DREAM_CASES_T_CASE", "0.5"))
+# Пороги — ревизия 22.10 (dream-v2.md §12): склейка верна 94/97 при 0,7; спарк — только при
+# p(agent) ≥ 0,9 (40/43), прочие дела с действием — карточкой владельцу.
+T_CASE = float(os.environ.get("DREAM_CASES_T_CASE", "0.7"))
+T_AGENT = float(os.environ.get("DREAM_CASES_T_AGENT", "0.9"))
+T_WATCH = float(os.environ.get("DREAM_CASES_T_WATCH", "0.5"))
 T_CLOSE = float(os.environ.get("DREAM_CASES_T_CLOSE", "0.8"))
 T_VERIFY = float(os.environ.get("DREAM_CASES_T_VERIFY", "0.5"))
 FALLBACK_COS = float(os.environ.get("DREAM_CASES_FALLBACK_COS", "0.75"))
 CAP_CARDS = int(os.environ.get("DREAM_CASES_CAP_CARDS", "3"))
 CAP_SPAWNS = int(os.environ.get("DREAM_CASES_CAP_SPAWNS", "2"))
 STALE_DAYS = int(os.environ.get("DREAM_CASES_STALE_DAYS", "14"))
+# Фаза 3 (mode=on): карточка — мост digest-bot POST /secretary-card, ответ кнопки session-manager
+# дописывает в answers.jsonl; спарк — spark.sh в проекте brain-dream, итог — `outcome`.
+CARD_BRIDGE = os.environ.get("DREAM_CARD_BRIDGE", "http://de-vps:3019")
+SPARK = os.environ.get("DREAM_SPARK", f"{HOME}/.claude/skills/spark/spark.sh")
+TG_NOTIFY = f"{HOME}/bin/tg-notify"
+CARD_BUTTONS = [{"key": "ack", "label": "✅ Принял — закрыть"}, {"key": "task", "label": "🛠 Сделай задачу"},
+                {"key": "noise", "label": "🔇 Это шум"}]
+TEAM_REPOS = "vipzal*, vipzal-*, aeroflot-vipzal, sirena-terminal-site, pa-*, persona*, *-widget"
 
 EVIDENCE_PREFIXES = ("decision:", "lesson:", "procedure:", "note:", "project:")
 
@@ -272,6 +284,8 @@ class Ledger:
         self.events_path = f"{state}/events.jsonl"
         self.vec_path = f"{state}/vectors.npz"
         self.cases = {}
+        self.cards = {}  # cardId → case
+        self.answered = set()  # (cardId, at) уже свёрнутых нажатий
         if os.path.exists(self.events_path):
             for line in read(self.events_path).splitlines():
                 self._fold(json.loads(line))
@@ -292,8 +306,21 @@ class Ledger:
             c["facts"] = (c["facts"] + [e["text"]])[-3:]
             if e.get("severity"):
                 c["severity"] = e["severity"]
-        elif ev in ("close", "stale"):
-            c["status"] = "closed" if ev == "close" else "stale"
+        elif ev in ("close", "stale", "dropped"):
+            c["status"] = {"close": "closed", "stale": "stale", "dropped": "dropped"}[ev]
+        elif ev == "card":
+            self.cards[e["cardId"]] = c["id"]
+            c["routed"], c["pending"] = "owner", None
+        elif ev == "spawn":
+            c["routed"], c["session"], c["pending"] = "agent", e.get("session"), None
+        elif ev == "answer":
+            self.answered.add((e["cardId"], e.get("at")))
+            if e["choice"] == "task":  # владелец отдал агенту: спарк в следующую ночь
+                c["actor"], c["pending"] = "agent", "agent"
+        elif ev == "verifying":
+            c["status"], c["pr"] = "verifying", e.get("evidence")
+        elif ev == "escalate":  # спарк вернул дело владельцу
+            c["status"], c["actor"], c["pending"] = "open", "owner", "owner"
 
     def emit(self, e):
         e.setdefault("ts", dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
@@ -306,7 +333,8 @@ class Ledger:
         np.savez(self.vec_path, **self.vecs)
 
     def open_cases(self):
-        return [c for c in self.cases.values() if c["status"] == "open"]
+        """Дела, к которым клеятся новые находки: открытые и ждущие мержа PR спарка."""
+        return [c for c in self.cases.values() if c["status"] in ("open", "verifying")]
 
 
 def p_of(ans, key, field="noul"):
@@ -321,6 +349,7 @@ def process_night(led, date):
     items = parse_top10(date)
     m = Counter(insights=len(items))
     if not items:
+        route_all(led, date, pending_routes(led), m)
         return m
     vecs = embed([f"{x['title']}. {x['body'][:400]} {x['action'][:200]}" for x in items])
     routes = []
@@ -339,7 +368,8 @@ def process_night(led, date):
         ans = jev(state, gate_questions(list(keys)))
         top_cos = sims[0][0] if sims else 0.0
         rec = {"date": date, "insight": x["id"], "text": text[:600], "title": x["title"][:200],
-               "top_cos": round(top_cos, 3), "prior": [p["id"] for p in prior], "jev": ans is not None}
+               "top_cos": round(top_cos, 3), "prior": [p["id"] for p in prior], "jev": ans is not None,
+               "cands": {k: c["id"] for k, c in keys.items()}}  # дела под ключами C1..C5 — для кривых ревизии
         if ans is None:  # fail-open: только косинус
             case_choice, case_conf = ("C1" if keys and top_cos >= FALLBACK_COS else "new"), None
             known_p, actor, sev, ver_p = None, None, None, None
@@ -369,7 +399,7 @@ def process_night(led, date):
                 routes.append((c["id"], c.get("actor") or actor, sev, "severity_up"))
             continue
         cid = f"case:{date}-{x['n']}"
-        route = actor if (actor and (ver_p is None or ver_p >= T_VERIFY)) else "watch"
+        route = pick_route(rec.get("p"), ver_p)
         led.emit({**rec, "event": "open", "case": cid, "actor": route, "severity": sev})
         led.vecs[cid] = v
         m["open"] += 1
@@ -377,23 +407,194 @@ def process_night(led, date):
             routes.append((cid, route, sev, "new"))
         else:
             m["watch"] += 1
-    # Маршрут с потолками (§3.5). В shadow — только событие would_*.
-    routes.sort(key=lambda r: SEV_RANK.get(r[2], 4))
-    used = Counter()
-    for cid, actor, sev, why in routes:
-        kind, cap = ("spawn", CAP_SPAWNS) if actor == "agent" else ("card", CAP_CARDS)
-        over = used[kind] >= cap
-        used[kind] += 0 if over else 1
-        led.emit({"date": date, "event": f"would_{kind}" if not over else f"capped_{kind}", "case": cid,
-                  "severity": sev, "why": why})
-        m[f"would_{kind}" if not over else f"capped_{kind}"] += 1
+    route_all(led, date, pending_routes(led) + sorted(routes, key=lambda r: SEV_RANK.get(r[2], 4)), m)
     return m
+
+
+def pending_routes(led):
+    """Дела, которые владелец отдал агенту («Сделай задачу») или спарк вернул владельцу, — первыми."""
+    return [(c["id"], c["pending"], c.get("severity"), "pending") for c in led.open_cases() if c.get("pending")]
+
+
+def pick_route(p, ver_p):
+    """Исполнитель нового дела по сырым вероятностям Jev (кривые §12); без Jev — watch."""
+    pa = (p or {}).get("actor") or {}
+    if not pa or (ver_p is not None and ver_p < T_VERIFY):
+        return "watch"
+    if pa.get("agent", 0) >= T_AGENT:
+        return "agent"
+    if pa.get("watch", 0) >= T_WATCH:
+        return "watch"
+    return "owner"
+
+
+def route_all(led, date, routes, m):
+    """Маршрут с потолками (§3.5): shadow — событие would_*, on — карточка или спарк."""
+    used, seen = Counter(), set()
+    for cid, actor, sev, why in routes:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        kind, cap = ("spawn", CAP_SPAWNS) if actor == "agent" else ("card", CAP_CARDS)
+        c = led.cases[cid]
+        # PR спарка ждёт мержа или спарк уже работал над делом — второй спарк не нужен.
+        if c["status"] == "verifying" or (kind == "spawn" and c.get("session") and why != "pending"):
+            continue
+        if used[kind] >= cap:
+            led.emit({"date": date, "event": f"capped_{kind}", "case": cid, "severity": sev, "why": why})
+            m[f"capped_{kind}"] += 1
+            continue
+        used[kind] += 1
+        led.emit({"date": date, "event": f"would_{kind}", "case": cid, "severity": sev, "why": why})
+        m[f"would_{kind}"] += 1
+        if MODE != "on":
+            continue
+        res = send_card(c, sev, why) if kind == "card" else spawn_spark(c, date)
+        led.emit({"date": date, "event": kind, "case": cid, **res})
+        m[f"{kind}_{res.get('channel') or res.get('result')}"] += 1
+
+
+# ── Фаза 3: карточка владельцу и спарк ──────────────────────────────────────
+def card_id(cid):
+    import hashlib
+    return "dream" + hashlib.sha1(cid.encode()).hexdigest()[:11]
+
+
+def card_text(c, sev, why):
+    head = {"new": "новое дело", "severity_up": "выросла цена бездействия", "pending": "вернулось от агента"}
+    facts = "\n\n".join(c["facts"][-2:])
+    return (f"🌙 Сон · {head.get(why, why)} · цена: {sev or '?'}\n{c['title']}\n\n{facts[:1500]}\n\n"
+            f"Дело {c['id']} с {c['opened']}, фактов {c.get('hits', 1)}.")
+
+
+def send_card(c, sev, why):
+    cid = card_id(c["id"])
+    msg = {"cardId": cid, "text": card_text(c, sev, why), "quiet": True, "buttons": CARD_BUTTONS}
+    try:
+        req = urllib.request.Request(f"{CARD_BRIDGE}/secretary-card", data=json.dumps(msg).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            if json.load(r).get("ok"):
+                return {"cardId": cid, "channel": "bridge"}
+    except Exception:  # noqa: BLE001 — мост недоступен: запасной канал без кнопок
+        pass
+    import subprocess
+    try:
+        subprocess.run([TG_NOTIFY, msg["text"] + "\n(кнопки недоступны: мост digest-bot не ответил)"],
+                       timeout=20, check=True, capture_output=True)
+        return {"cardId": cid, "channel": "tg"}
+    except Exception:  # noqa: BLE001
+        return {"cardId": cid, "channel": "failed"}
+
+
+SPARK_TASK = """Дело сна v2 {cid} (журнал ~/brain/dreams/.cases, дизайн ~/Projects/brain-dream/docs/design/dream-v2.md §3).
+Ночной обзор базы знаний нашёл проблему и отдал её агенту. Заголовок: {title}
+
+Факты по ночам (последние):
+{facts}
+
+Порядок:
+1. Проверь фактом, что проблема ещё есть (код, конфиг, Brain через mcp__brain__brain_search, читающие команды).
+   Уже решена — шаг 4 с `--result done`, доказательство — коммит, файл или id узла.
+2. Найди репозиторий проблемы в ~/Projects. Командные репо ({team}) — ни коммитов, ни пушей: шаг 4 с `--result report`.
+   Нужен владелец (деньги, договоры, люди, юр./налоговое, физическое, продуктовый выбор, перевыпуск ключей) — `--result report`.
+3. Своё соло-репо: ветка `dream/{slug}` в отдельном git worktree, минимальный фикс с тестом, `git push -u origin dream/{slug}`,
+   `gh pr create` с описанием «проблема · до · после» и ссылкой на дело {cid}. PR НЕ мержить (решение владельца 22.10).
+   Правка процедуры/знания без репо — через mcp__brain__brain_add, доказательство — id узла (`--result done`).
+4. Итог — ровно одна команда:
+   python3 ~/Projects/brain-dream/tools/dream-cases.py outcome --case {cid} --result <pr|done|report|noise> --evidence "<URL PR | коммит | id узла | одна фраза почему>"
+   `noise` — находка ложная или не стоит работы.
+Наружу (люди, деньги, сообщения) ничего не отправлять.
+"""
+
+
+def spawn_spark(c, date):
+    import subprocess
+    slug = c["id"].split(":", 1)[1]
+    os.makedirs(f"{STATE}/tasks", exist_ok=True)
+    task = f"{STATE}/tasks/{slug}.md"
+    with open(task, "w", encoding="utf-8") as f:
+        f.write(SPARK_TASK.format(cid=c["id"], title=c["title"], facts="\n\n".join(c["facts"][-3:]),
+                                  team=TEAM_REPOS, slug=slug))
+    try:
+        r = subprocess.run(["bash", SPARK, "--project", "brain-dream", "--name", f"dream-{slug}",
+                            "--model", "sonnet", "--effort", "medium", "--task-file", task],
+                           timeout=600, capture_output=True, text=True)
+        ok = r.returncode == 0
+        return {"session": f"brain-dream__dream-{slug}", "result": "spawned" if ok else "failed",
+                "err": None if ok else (r.stderr or r.stdout)[-300:]}
+    except Exception as e:  # noqa: BLE001
+        return {"session": None, "result": "failed", "err": str(e)[:300]}
+
+
+# ── Ответы владельца и итоги спарков ────────────────────────────────────────
+def ingest_answers(led, date):
+    """Нажатия кнопок карточек (session-manager пишет answers.jsonl): ack → close, noise → dropped,
+    task → дело уходит агенту в маршрут ближайшей ночи."""
+    m = Counter()
+    path = f"{led.state}/answers.jsonl"
+    if not os.path.exists(path):
+        return m
+    for line in read(path).splitlines():
+        try:
+            a = json.loads(line)
+        except ValueError:
+            continue
+        cid = led.cards.get(a.get("cardId"))
+        if not cid or (a["cardId"], a.get("at")) in led.answered or a.get("choice") not in ("ack", "task", "noise"):
+            continue
+        led.emit({"date": date, "event": "answer", "case": cid, "cardId": a["cardId"], "choice": a["choice"],
+                  "at": a.get("at")})
+        if a["choice"] == "ack":
+            led.emit({"date": date, "event": "close", "case": cid, "via": "owner-ack"})
+        elif a["choice"] == "noise":
+            led.emit({"date": date, "event": "dropped", "case": cid, "via": "owner-noise"})
+        m[f"answer_{a['choice']}"] += 1
+    return m
+
+
+def outcome(led, cid, result, evidence):
+    """Итог спарка: pr → verifying (ждёт мержа), done → close, report → карточка владельцу, noise → dropped."""
+    if cid not in led.cases:
+        raise SystemExit(f"нет дела {cid}")
+    date = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    ev = {"pr": "verifying", "done": "close", "report": "escalate", "noise": "dropped"}[result]
+    led.emit({"date": date, "event": ev, "case": cid, "via": "spark", "evidence": evidence})
+    return ev
+
+
+def open_list(led, limit):
+    """Открытые дела для синтеза (§3 шаг 1): свежие и частые первыми, строка на дело."""
+    cs = sorted(led.open_cases(), key=lambda c: (c["last"], c.get("hits", 1)), reverse=True)[:limit]
+    out = []
+    for c in cs:
+        fact = re.sub(r"\s+", " ", c["facts"][-1].split("\n", 1)[-1])[:160]
+        state = "ждёт мержа PR" if c["status"] == "verifying" else f"фактов {c.get('hits', 1)}"
+        out.append(f"- {c['title'][:120]} · с {c['opened']} · {state} · {fact}")
+    return "\n".join(out)
+
+
+def pr_state(url):
+    import subprocess
+    try:
+        r = subprocess.run(["gh", "pr", "view", url, "--json", "state", "-q", ".state"],
+                           timeout=30, capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def verify_open(led, date):
     """Закрытие открытых дел по записям Brain, сделанным после открытия (§3.6)."""
     m = Counter()
     for c in led.open_cases():
+        if c["status"] == "verifying":  # PR спарка: мерж — закрыто, закрыт без мержа — отброшено
+            st = pr_state(c["pr"]) if str(c.get("pr") or "").startswith("https://github.com/") else None
+            if st in ("MERGED", "CLOSED"):
+                led.emit({"date": date, "event": "close" if st == "MERGED" else "dropped", "case": c["id"],
+                          "via": "pr-" + st.lower(), "evidence": [c["pr"]]})
+                m["close" if st == "MERGED" else "dropped"] += 1
+            continue
         if c["opened"] >= date:
             continue
         text = f"{c['title']}\n{c['facts'][0]}"[:1200]
@@ -416,11 +617,13 @@ def verify_open(led, date):
 
 def run_night(state, date):
     led = Ledger(state)
+    answers = ingest_answers(led, date)  # нажатия свёртываются и на повторном запуске ночи
     if os.path.exists(f"{state}/metrics/{date}.json"):
-        print(f"{date}: уже обработана", file=sys.stderr)
+        print(f"{date}: уже обработана {dict(answers) or ''}", file=sys.stderr)
         return None
     t0 = time.time()
     m = verify_open(led, date)
+    m.update(answers)
     m.update(process_night(led, date))
     led.save_vecs()
     m["open_total"] = len(led.open_cases())
@@ -484,7 +687,21 @@ def main():
     s.add_argument("--state", required=True)
     s.add_argument("--labels", required=True)
     s.add_argument("--clusters", required=True)
+    o = sub.add_parser("outcome", help="итог спарка по делу")
+    o.add_argument("--case", required=True)
+    o.add_argument("--result", required=True, choices=["pr", "done", "report", "noise"])
+    o.add_argument("--evidence", required=True)
+    o.add_argument("--state", default=STATE)
+    ls = sub.add_parser("open-list", help="открытые дела строками — в промпт синтеза")
+    ls.add_argument("--limit", type=int, default=40)
+    ls.add_argument("--state", default=STATE)
     a = ap.parse_args()
+    if a.cmd == "outcome":  # итог уже идущего спарка пишется в любом режиме
+        print(outcome(Ledger(a.state), a.case, a.result, a.evidence))
+        return
+    if a.cmd == "open-list":
+        print(open_list(Ledger(a.state), a.limit))
+        return
     if MODE == "off" and a.cmd != "score":
         print("DREAM_CASES_MODE=off", file=sys.stderr)
         return
