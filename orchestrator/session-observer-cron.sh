@@ -15,6 +15,9 @@ set -euo pipefail
 # systemd --user окружение не несёт ~/.local/bin: ворота стиля (tools/style_gate.py) зовут
 # claude-pool, и 17.10 12:00 UTC все 5 вызовов упали FileNotFoundError — находки ушли без правки.
 export PATH="$HOME/.nvm/versions/node/v22.22.2/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+# Claude-аккаунт на каждый вызов — правилом SM при старте сессии (claude-pool --account auto):
+# 22→23.10.2026 пул держал один genlorem с исчерпанным недельным лимитом, сон упал 38 из 60.
+export CLAUDE_POOL_ACCOUNT="${CLAUDE_POOL_ACCOUNT:-auto}"
 
 REPO="${REPO:-$HOME/Projects/brain-dream}"
 LOG="${LOG:-$HOME/life/state/logs/session-observer.log}"

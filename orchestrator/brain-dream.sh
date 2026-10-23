@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Claude-аккаунт на каждый вызов — правилом SM при старте сессии (claude-pool --account auto):
+# 22→23.10.2026 пул держал один genlorem с исчерпанным недельным лимитом, сон упал 38 из 60.
+export CLAUDE_POOL_ACCOUNT="${CLAUDE_POOL_ACCOUNT:-auto}"
 
 # Каталог orchestrator-а (соседние gemini.sh и dream-images.sh ищем рядом,
 # независимо от того, откуда запущен скрипт).
