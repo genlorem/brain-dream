@@ -21,6 +21,10 @@ REPO="${BRAIN_DREAM_REPO:-$(cd "$AGENT_DIR/.." && pwd)}"
 DREAM_NODE_ROOT="${DREAM_NODE_ROOT:-$HOME/brain/dreams}"
 BRAIN_ROOT="${BRAIN_ROOT:-$HOME/brain}"
 INSIGHT_REGISTRY="${INSIGHT_REGISTRY:-$DREAM_NODE_ROOT/.insight-hashes.jsonl}"
+# Фоновые вызовы самого конвейера снов не разбираем (tools/observer_skip.py, 26.10.2026:
+# ~51 % находок недели извлекались из них). OBSERVER_SKIP_PIPELINE=0 — разбирать всё.
+OBSERVER_SKIP="${OBSERVER_SKIP:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/observer_skip.py}"
+OBSERVER_SKIP_PIPELINE="${OBSERVER_SKIP_PIPELINE:-1}"
 STYLE_GATE="${STYLE_GATE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/style_gate.py}"
 GEMINI_SH="$REPO/orchestrator/gemini.sh"
 
@@ -288,6 +292,12 @@ while IFS= read -r session_path; do
   # Derive session_id from path
   session_id=$(basename "$(dirname "$session_path")")/$(basename "$session_path" .jsonl)
   session_id="${session_id//\//-}"
+
+  if [ "$OBSERVER_SKIP_PIPELINE" = "1" ] && skip_rule=$(python3 "$OBSERVER_SKIP" "$session_path" 2>/dev/null); then
+    log INFO "session_pipeline_skip session_id=$session_id rule=$skip_rule"
+    sessions_skipped=$((sessions_skipped + 1))
+    continue
+  fi
 
   # Get mtime
   mtime_epoch=$(stat -c %Y "$session_path" 2>/dev/null || stat -f %m "$session_path" 2>/dev/null || echo 0)
