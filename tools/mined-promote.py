@@ -19,6 +19,7 @@ from typing import Callable, Mapping, Sequence
 DREAMS = Path(os.environ.get("DREAM_NODE_ROOT", str(Path.home() / "brain" / "dreams")))
 DOMAINS = ("personal", "infra", "marquiz", "travelmart", "skvo", "indie", "govori")
 NODE_TYPES = ("note", "decision", "lesson")
+WEAK_DROP_DEFER_LIMIT = 3
 DEFAULT_JUDGE_CMD = ["gemini", "-m", "gemini-2.5-flash", "-p", "{PROMPT}"]
 
 
@@ -533,6 +534,7 @@ def run_promote(
     judge: Callable[[str], object] | None = None,
     gateway: object | None = None,
     today: date | None = None,
+    weak_drop_limit: int = WEAK_DROP_DEFER_LIMIT,
 ) -> dict[str, object]:
     """Выполнить акт с инъекцией judge и MCP gateway для тестов."""
     run_date = today or datetime.now(timezone.utc).date()
@@ -544,6 +546,7 @@ def run_promote(
         decisions_path=state_path,
     )
     selected = candidates[:max(0, max_promote)]
+    prior_defers = defer_counts(state_path)
     active_gateway = gateway or FastMCPGateway()
     active_judge = judge or (
         lambda prompt: subprocess_judge(
@@ -646,7 +649,10 @@ def run_promote(
             # drop необратим (state-лог блокирует пересуд), поэтому требует
             # уверенности выше drop_conf; ниже — обратимый defer. Ловит
             # флип-флоп судьи на пограничных фактах.
-            if decision.confidence < drop_conf:
+            if (
+                decision.confidence < drop_conf
+                and prior_defers.get(candidate.id, 0) < weak_drop_limit
+            ):
                 demoted = PromotionDecision(
                     "defer",
                     decision.domain,
@@ -660,6 +666,8 @@ def run_promote(
                     append_state(state_path, candidate.id, "defer", timestamp, None)
                 deferred.append((candidate.id, demoted))
                 continue
+            # слабый drop, повторённый weak_drop_limit раз, окончателен: иначе
+            # кандидат вечно занимает слот суда (бывало 42 отложения).
             if apply:
                 append_state(state_path, candidate.id, "drop", timestamp, None)
             dropped.append(
