@@ -248,6 +248,52 @@ class MinedPromoteTests(unittest.TestCase):
         self.assertEqual(record["id"], candidate_id)
         self.assertEqual(record["action"], "defer")
 
+    def test_weak_drop_becomes_terminal_after_repeated_defers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate_id = self.write_candidate(root, "stuck")
+            state = root / "promote-log" / "decisions.jsonl"
+            state.parent.mkdir()
+            state.write_text(
+                "".join(
+                    json.dumps({"id": candidate_id, "action": "defer"}) + "\n"
+                    for _ in range(3)
+                ),
+                encoding="utf-8",
+            )
+            weak = self.promote_decision(action="drop", confidence=0.85)
+            result = mined_promote.run_promote(
+                root,
+                apply=True,
+                gateway=FakeGateway(),
+                judge=lambda prompt: weak,
+                today=self.today,
+            )
+            last = json.loads(state.read_text(encoding="utf-8").splitlines()[-1])
+            again = mined_promote.run_promote(
+                root, apply=True, gateway=FakeGateway(),
+                judge=lambda prompt: weak, today=self.today,
+            )
+        self.assertEqual(result["dropped"], 1)
+        self.assertEqual(last["action"], "drop")
+        self.assertEqual(again["considered"], 0)
+
+    def test_weak_drop_still_defers_before_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_candidate(root, "fresh")
+            result = mined_promote.run_promote(
+                root,
+                apply=True,
+                gateway=FakeGateway(),
+                judge=lambda prompt: self.promote_decision(
+                    action="drop", confidence=0.85,
+                ),
+                today=self.today,
+            )
+        self.assertEqual(result["deferred"], 1)
+        self.assertEqual(result["dropped"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
