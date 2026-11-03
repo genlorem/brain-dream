@@ -1,3 +1,5 @@
+Снят 03.11.2026: единственная модель была Gemini, владелец убрал Gemini; находки больше не пишутся.
+
 # SPEC — `session-observer` agent
 
 > Observer-агент brain-dream: периодически дистиллирует находки из **файлов сессий Claude Code** (`~/.claude/projects/**/*.jsonl`) в Brain. Детерминированная (cron) замена ручной природы `/learn`. Аналог `notes-observer`, но источник — транскрипты сессий.

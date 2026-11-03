@@ -45,7 +45,7 @@ PAIR_RE = re.compile(r"`(\S+)`\s*<->\s*`(\S+)`")
 APPLIED_RE = re.compile(r"-\s*\[(?:applied|x)\]\s*`(\S+)`\s*<->\s*`(\S+)`")
 REJECTED_RE = re.compile(r"-\s*\[rejected\]\s*`(\S+)`\s*<->\s*`(\S+)`")
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
-DEFAULT_JUDGE_CMD = ["gemini", "-m", "gemini-2.5-flash", "-p", "{PROMPT}"]
+DEFAULT_JUDGE_CMD = ["claude-bg-remote", "--label", "dream-judge", "--model", "claude-haiku-4-5-20251001", "--no-session-persistence", "--", "{PROMPT}"]
 
 
 @dataclass(frozen=True)
@@ -392,7 +392,7 @@ def triage_prompt(pair: Pair, vault) -> str:
 def extract_json_object(text: str) -> str:
     """Вырезать первый JSON-объект из вывода LLM.
 
-    CLI-судьи (claude -p, gemini) оборачивают JSON в ```-фенсы и/или
+    CLI-судьи (claude -p) оборачивают JSON в ```-фенсы и/или
     сопровождают текстом — голый json.loads на весь stdout не работает.
     """
     start = text.find("{")
@@ -733,9 +733,7 @@ def kill_switch_path() -> Path:
 def resolve_judge_cmd() -> list[str]:
     """env GROOM_JUDGE_CMD (JSON-массив argv) переопределяет судью по умолчанию.
 
-    Нужен как fallback: дефолтный gemini делит дневную free-tier-квоту с ночными
-    снами и может быть исчерпан (TerminalQuotaError) — тогда судьёй ставится,
-    например, ["claude","-p","{PROMPT}","--model","claude-haiku-4-5-20251001"].
+    По умолчанию Haiku через claude-bg-remote (как в crontab).
     """
     raw = os.environ.get("GROOM_JUDGE_CMD")
     if not raw:

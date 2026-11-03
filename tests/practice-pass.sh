@@ -3,7 +3,7 @@
 #
 # Проверяет проводку моста «наблюдения → сон» целиком, без обращения к реальным
 # моделям и реальному ~/brain: поднимает локальный digest-сервер, подсовывает
-# стабы gemini.sh и claude-pool, гоняет ночь на временном HOME.
+# стаб claude-pool, гоняет ночь на временном HOME.
 #
 # Контракт:
 #   1. Есть свежие наблюдения → ровно ОДИН дополнительный вызов модели, кандидат
@@ -45,22 +45,19 @@ type: note
 Паттерн journalctl предложено закрыть обёрткой `svc-toolkit`, артефакта нет.
 NODE
 
-# Стаб Gemini: отдаёт один валидный инсайт JSONL. Ссылается на id ноды, который
-# мост обязан положить в allowed_ids.
-cat > "$TMP/gemini-stub.sh" <<'STUB'
-#!/usr/bin/env bash
-context="$(cat)"
-printf '%s' "$context" > "${STUB_CONTEXT_SINK:-/dev/null}"
-printf '{"title":"Нода про svc logs устарела","insight":"note:svc-logs-proposed говорит про предложение, а артефакт на диске уже есть","why":"граф расходится с практикой","novelty":"non-obvious","confidence":0.8,"source_ids":["note:svc-logs-proposed","obs:built"],"domain":"practice","lens":"practice"}\n'
-STUB
-chmod +x "$TMP/gemini-stub.sh"
-export GEMINI_SH="$TMP/gemini-stub.sh"
+# Sonnet получает контекст последним аргументом и возвращает JSON с result.
 export STUB_CONTEXT_SINK="$TMP/context-seen.txt"
-
-# check_dependencies требует claude-pool; синтез тоже идёт через него.
+export STUB_CALLS_SINK="$TMP/sonnet-calls.txt"
 cat > "$TMP/bin/claude-pool" <<'STUB'
 #!/usr/bin/env bash
-printf '{"result":"1. Нода note:svc-logs-proposed устарела относительно построенного артефакта."}\n'
+if [[ " $* " == *" --output-format json "* ]]; then
+  printf '%s' "${!#}" > "$STUB_CONTEXT_SINK"
+  printf 'call\n' >> "$STUB_CALLS_SINK"
+  jq -nc --arg result '{"title":"Нода про svc logs устарела","insight":"note:svc-logs-proposed говорит про предложение, артефакт на диске уже есть","why":"граф расходится с практикой","novelty":"non-obvious","confidence":0.8,"source_ids":["note:svc-logs-proposed","obs:built"],"domain":"practice","lens":"practice"}' '{result:$result,usage:{input_tokens:10,output_tokens:10},total_cost_usd:0}'
+else
+  cat >/dev/null
+  printf '1. Нода note:svc-logs-proposed устарела относительно построенного артефакта.\n'
+fi
 STUB
 chmod +x "$TMP/bin/claude-pool"
 export PATH="$TMP/bin:$PATH"
@@ -90,16 +87,15 @@ curl -fsS -o /dev/null "http://127.0.0.1:$PORT/digest.json" \
 
 run_night() {
   env BRAIN_DREAM_FLOCKED=1 \
-    HOME="$HOME" PATH="$PATH" GEMINI_SH="$GEMINI_SH" STUB_CONTEXT_SINK="$STUB_CONTEXT_SINK" \
+    HOME="$HOME" PATH="$PATH" STUB_CONTEXT_SINK="$STUB_CONTEXT_SINK" \
     DREAM_DOMAINS="personal" \
     DREAM_MAX_RUNS=0 \
     DREAM_OUT_DIR="$HOME/brain/dreams" \
-    DREAM_SONNET_FALLBACK=0 \
+    DREAM_SONNET_MAX_RUNS=0 \
     DREAM_DIGEST_DEDUP=0 \
     DREAM_TG_DIGEST=0 \
     DREAM_WRITE_NODE=0 \
     DREAM_FEEDBACK_BIAS=0 \
-    DREAM_COST_LIMIT_USD=0 \
     "$@" \
     bash "$ORCH" >/dev/null 2>&1
 }
@@ -139,8 +135,9 @@ jq -e '.items[0].class == "conformance"' "$SEL" >/dev/null \
   || fail "наблюдение с подтверждённым артефактом должно быть classed conformance"
 ok "выборка моста: класс conformance, id ноды разрешён как source_id"
 
-gemini_calls="$(grep -c 'stage=generation event=gemini_ok' "$LOG" || true)"
-[[ "$gemini_calls" == "1" ]] || fail "мост должен стоить ровно один вызов модели, было $gemini_calls"
+sonnet_calls="$(grep -c 'stage=sonnet event=claude_ok' "$LOG" || true)"
+[[ "$sonnet_calls" == "1" ]] || fail "мост должен стоить ровно один вызов модели, было $sonnet_calls"
+[[ "$(wc -l < "$STUB_CALLS_SINK")" == "1" ]] || fail "стаб получил лишний вызов Sonnet"
 ok "стоимость моста — ровно один вызов модели"
 
 grep -q 'Practice bridge: fed' "$HOME/brain/dreams/dream-$(date -u +%F).md" \
@@ -169,5 +166,20 @@ run_night DREAM_OBSERVATIONS=0 \
 grep -q 'stage=practice event=skip reason=disabled' "$LOG" \
   || fail "DREAM_OBSERVATIONS=0 не выключает мост"
 ok "DREAM_OBSERVATIONS=0 полностью выключает мост"
+
+# Обычная генерация: явный лимит и значение по умолчанию используют Sonnet.
+for target in explicit default; do
+  rm -rf "$HOME/brain/dreams"
+  : > "$LOG"
+  : > "$STUB_CALLS_SINK"
+  if [[ "$target" == explicit ]]; then
+    run_night DREAM_OBSERVATIONS=0 DREAM_SONNET_MAX_RUNS=1 DREAM_SONNET_FALLBACK_RUNS=2
+  else
+    run_night DREAM_OBSERVATIONS=0 DREAM_SONNET_MAX_RUNS= DREAM_SONNET_FALLBACK_RUNS=1
+  fi
+  [[ "$(wc -l < "$STUB_CALLS_SINK")" == "1" ]] || fail "неверное число вызовов: $target"
+  grep -q 'stage=sonnet event=done launched=1' "$LOG" || fail "нет Sonnet generation: $target"
+  ok "обычная генерация Sonnet: $target"
+done
 
 printf '\nВсе проверки practice-pass прошли.\n'

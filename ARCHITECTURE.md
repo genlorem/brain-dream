@@ -128,7 +128,6 @@ AND-chain. Failure of any one blocks the agent.
 On every write-path to `~/brain/`. Extended Fabric MEM-07 patterns: Anthropic, AWS, GitHub, Slack, JWT, Bearer, high-entropy base64.
 
 ### 5. Budget caps
-- Gemini: real-money cap from `DREAM_COST_LIMIT_USD` (default $0.50/night).
 - Sonnet: session-share cap from `DREAM_SONNET_SESSION_CAP_PCT` (default 30% of Max 5h window).
 
 ## Phased rollout

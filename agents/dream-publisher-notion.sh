@@ -442,7 +442,7 @@ for line in fm_lines:
         result[key] = parse_scalar(rest)
 
 # Extract numeric fields safely
-for field in ['gemini_passes', 'gemini_cost_usd', 'sonnet_passes',
+for field in ['sonnet_passes',
               'sonnet_session_share_pct', 'candidate_count']:
     if field in result:
         try:
@@ -688,8 +688,6 @@ for node_file in "${TARGET_FILES[@]}"; do
   node_title=$(printf '%s' "$parsed" | jq -r '.title // ""')
   node_date=$(printf '%s' "$parsed" | jq -r '.date // ""')
   node_domains=$(printf '%s' "$parsed" | jq -c '.domains // []')
-  node_gemini_cost=$(printf '%s' "$parsed" | jq -r '.gemini_cost_usd // 0')
-  node_gemini_passes=$(printf '%s' "$parsed" | jq -r '.gemini_passes // 0')
   node_sonnet_passes=$(printf '%s' "$parsed" | jq -r '.sonnet_passes // 0')
   node_sonnet_share=$(printf '%s' "$parsed" | jq -r '.sonnet_session_share_pct // 0')
   node_candidates=$(printf '%s' "$parsed" | jq -r '.candidate_count // 0')
@@ -731,8 +729,6 @@ for node_file in "${TARGET_FILES[@]}"; do
     --arg date "$node_date" \
     --argjson domains "$domains_ms" \
     --arg top_title "$node_top_title" \
-    --argjson gemini_cost "$node_gemini_cost" \
-    --argjson gemini_passes "$node_gemini_passes" \
     --argjson sonnet_passes "$node_sonnet_passes" \
     --argjson sonnet_share "$node_sonnet_share_dec" \
     --argjson candidates "$node_candidates" \
@@ -743,8 +739,6 @@ for node_file in "${TARGET_FILES[@]}"; do
       "Статус":      {"select": {"name": "черновик"}},
       "Домены":      {"multi_select": $domains},
       "Главная тема":{"rich_text": [{"text": {"content": $top_title}}]},
-      "Стоимость Gemini": {"number": $gemini_cost},
-      "Gemini passes":    {"number": $gemini_passes},
       "Sonnet passes":    {"number": $sonnet_passes},
       "Sonnet share %":   {"number": $sonnet_share},
       "Кандидатов":       {"number": $candidates},

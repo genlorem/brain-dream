@@ -4,8 +4,7 @@ set -euo pipefail
 # 22→23.10.2026 пул держал один genlorem с исчерпанным недельным лимитом, сон упал 38 из 60.
 export CLAUDE_POOL_ACCOUNT="${CLAUDE_POOL_ACCOUNT:-auto}"
 
-# Каталог orchestrator-а (соседние gemini.sh и dream-images.sh ищем рядом,
-# независимо от того, откуда запущен скрипт).
+# Соседний dream-images.sh ищем независимо от каталога запуска.
 ORCHESTRATOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Корень репо brain-dream — для подключения общих lib (content-hash, insight-hashes).
@@ -19,22 +18,18 @@ source "$BRAIN_DREAM_REPO/lib/insight-hashes.sh"
 #
 # Ночной "сон" над knowledge graph в ~/brain:
 # - читает markdown-ноды выбранных доменов, группирует их по type или поддиректории;
-# - ночью запускает ограниченное число параллельных Gemini-проходов через разные линзы;
+# - генерирует кандидатов через Sonnet;
 # - собирает кандидаты-инсайты, синтезирует ТОП-10 через Claude и оставляет Markdown-результат;
 # - отправляет краткое резюме в Telegram и best-effort обложку-картинку.
 #
 # Параметры задаются env:
 #   DREAM_DOMAINS="travelmart personal"
-#   DREAM_MAX_RUNS=500
+#   DREAM_SONNET_MAX_RUNS=60
 #   DREAM_DEADLINE_UTC="HH:MM" или epoch-seconds
 #   DREAM_OVERRUN_RUNS=25
 #   DREAM_OVERRUN_MIN=20
-#   DREAM_CONCURRENCY=3
+#   DREAM_SONNET_CONCURRENCY=3
 #   DREAM_OUT_DIR="$HOME/brain/dreams"
-#   DREAM_IMAGE_MODEL="gemini-2.5-flash-image"
-#   DREAM_COST_LIMIT_USD=0.50      # денежный потолок на Gemini за ночь; 0 = выкл
-#   DREAM_PRICE_IN_PER_M=1.50      # цена входных токенов за 1M
-#   DREAM_PRICE_OUT_PER_M=9.00     # цена выходных токенов за 1M
 #
 # Важно: доменные данные строго READ-ONLY. Скрипт не делает git-операций,
 # не переиндексирует и ничего не пишет в domain repos. Он только читает *.md
@@ -52,22 +47,18 @@ Usage:
 Runs a bounded nightly "sleep" over ~/brain knowledge graph nodes.
 
 Examples:
-  nohup env DREAM_MAX_RUNS=300 DREAM_CONCURRENCY=4 ~/life/scripts/brain-dream.sh >/dev/null 2>&1 &
+  nohup env DREAM_SONNET_MAX_RUNS=300 DREAM_SONNET_CONCURRENCY=4 ~/Projects/brain-dream/orchestrator/brain-dream.sh >/dev/null 2>&1 &
 
   echo 'env DREAM_DEADLINE_UTC=04:30 DREAM_DOMAINS="travelmart personal" ~/life/scripts/brain-dream.sh' | at 01:00
 
 Env params:
   DREAM_DOMAINS         default: "travelmart personal"
-  DREAM_MAX_RUNS        default: 500
+  DREAM_SONNET_MAX_RUNS        default: DREAM_SONNET_FALLBACK_RUNS (60)
   DREAM_DEADLINE_UTC    default: empty; "HH:MM" today UTC or epoch seconds
   DREAM_OVERRUN_RUNS    default: 25
   DREAM_OVERRUN_MIN     default: 20
-  DREAM_CONCURRENCY     default: 3
+  DREAM_SONNET_CONCURRENCY     default: 2
   DREAM_OUT_DIR         default: $HOME/brain/dreams
-  DREAM_IMAGE_MODEL     default: gemini-2.5-flash-image
-  DREAM_COST_LIMIT_USD  default: 0.50   (денежный потолок на Gemini за ночь; 0 = выкл)
-  DREAM_PRICE_IN_PER_M  default: 1.50   (цена входных токенов за 1M)
-  DREAM_PRICE_OUT_PER_M default: 9.00   (цена выходных токенов за 1M)
   DREAM_SATURATION_MIN_YIELD       default: 3   (early-stop: мин. прирост кандидатов за интервал; 0 = выкл)
   DREAM_SATURATION_CHECK_INTERVAL  default: 50  (проходов между проверками насыщения)
   DREAM_OBSERVATIONS               default: 1   (мост «наблюдения → сон»: +1 проход с линзой practice; 0 = выкл)
@@ -104,64 +95,28 @@ if [[ "${BRAIN_DREAM_FLOCKED:-}" != "1" ]]; then
 fi
 
 DREAM_DOMAINS="${DREAM_DOMAINS:-travelmart personal}"
-DREAM_MAX_RUNS="${DREAM_MAX_RUNS:-500}"
 DREAM_DEADLINE_UTC="${DREAM_DEADLINE_UTC:-}"
 DREAM_OVERRUN_RUNS="${DREAM_OVERRUN_RUNS:-25}"
 DREAM_OVERRUN_MIN="${DREAM_OVERRUN_MIN:-20}"
-DREAM_CONCURRENCY="${DREAM_CONCURRENCY:-3}"
 DREAM_OUT_DIR="${DREAM_OUT_DIR:-$HOME/brain/dreams}"
-DREAM_IMAGE_MODEL="${DREAM_IMAGE_MODEL:-gemini-2.5-flash-image}"
 
 # Early-stop по насыщению кандидатов. Уникальный сигнал исчерпывается в первых
 # ~100 проходах; дальше dedup (content_hash_insight) поглощает повторы и проходы
 # жгут бюджет почти без выхлопа. Каждые DREAM_SATURATION_CHECK_INTERVAL проходов
 # сравниваем прирост строк в CANDIDATES_FILE: если он < DREAM_SATURATION_MIN_YIELD
-# — обрываем генерацию. Работает и в Gemini-, и в Sonnet-фазе.
+# — останавливаем генерацию.
 # DREAM_SATURATION_MIN_YIELD=0 полностью отключает проверку.
 DREAM_SATURATION_MIN_YIELD="${DREAM_SATURATION_MIN_YIELD:-3}"
 DREAM_SATURATION_CHECK_INTERVAL="${DREAM_SATURATION_CHECK_INTERVAL:-50}"
 
-# Денежный потолок на Gemini-генерацию за ночь (в долларах). Считаем фактический
-# расход по токенам из ответов API и останавливаем генерацию при достижении
-# лимита. 0 = без лимита (старое поведение, только max_runs). Цены — за 1M
-# токенов; дефолты под gemini-3.5-flash (вход $1.50 / выход $9.00 на 05.2026).
-# Синтез Claude и картинки Higgsfield идут с других балансов — в лимит не входят.
-DREAM_COST_LIMIT_USD="${DREAM_COST_LIMIT_USD:-0.50}"
-DREAM_PRICE_IN_PER_M="${DREAM_PRICE_IN_PER_M:-1.50}"
-DREAM_PRICE_OUT_PER_M="${DREAM_PRICE_OUT_PER_M:-9.00}"
-
-# Бэкенд Gemini-генерации:
-#   api (по умолчанию) — REST generativelanguage + API-ключ AIza… из
-#     ~/.config/gemini/config.env (биллинг на GCP-проект ключа, monthly spend cap).
-#   cli — локальный gemini CLI на OAuth-аккаунте (отдельная free-квота Code
-#     Assist, не доллары). Минусы: ~3-6с старта node на вызов и RPM-лимиты
-#     OAuth, поэтому держи DREAM_CONCURRENCY/DREAM_MAX_RUNS скромными и модель из
-#     поддерживаемых OAuth (gemini-2.5-flash; 3.5 через OAuth недоступна).
-# Пробрасывается в gemini.sh как GEMINI_BACKEND. На cli денежный потолок теряет
-# смысл (нет $-биллинга), а раздутые входные токены CLI ложно тригерят cap —
-# поэтому ниже обнуляем cost-cap и цены (отчёт показывает $0.00, что и есть факт).
-DREAM_GEMINI_BACKEND="${DREAM_GEMINI_BACKEND:-api}"
-if [[ "$DREAM_GEMINI_BACKEND" == "cli" ]]; then
-  export GEMINI_BACKEND="cli"
-  DREAM_COST_LIMIT_USD=0
-  DREAM_PRICE_IN_PER_M=0
-  DREAM_PRICE_OUT_PER_M=0
-fi
-
-# Вторая фаза генерации на Claude Sonnet (для сравнения с Gemini и как
-# fallback-продолжение, если Gemini рано упёрся в денежный лимит). Включается
-# DREAM_SONNET_COMPARE=1. По умолчанию ВЫКЛ — плановый cron работает как раньше.
-#
 # Sonnet идёт через claude CLI (подписка Claude Code, НЕ API-кошелёк), поэтому
 # реальный «расход» — не доллары, а доля от сессионного лимита подписки
 # (5-часовое окно). Поле total_cost_usd, которое отдаёт claude --output-format
 # json, — расчётная API-цена «сколько бы стоило по прайсу», справочно; в
 # биллинге не списывается. Предохранитель — % сессии, не доллары.
-DREAM_SONNET_COMPARE="${DREAM_SONNET_COMPARE:-0}"
 DREAM_SONNET_MODEL="${DREAM_SONNET_MODEL:-sonnet}"
 DREAM_SONNET_CONCURRENCY="${DREAM_SONNET_CONCURRENCY:-2}"
-# Потолок проходов Sonnet: пусто = столько же, сколько успел Gemini. Число =
-# жёсткий абсолютный потолок (страховка сверху).
+# Потолок проходов: пусто = DREAM_SONNET_FALLBACK_RUNS (60).
 DREAM_SONNET_MAX_RUNS="${DREAM_SONNET_MAX_RUNS:-}"
 # Сессионный лимит твоего плана Claude Code (вызовов / 5 часов). Max 5x ≈ 200.
 DREAM_SONNET_SESSION_LIMIT_CALLS="${DREAM_SONNET_SESSION_LIMIT_CALLS:-200}"
@@ -169,13 +124,6 @@ DREAM_SONNET_SESSION_LIMIT_CALLS="${DREAM_SONNET_SESSION_LIMIT_CALLS:-200}"
 # 30% при лимите 200 = 60 вызовов за ночь, дневной остаток подписки сохранён.
 DREAM_SONNET_SESSION_CAP_PCT="${DREAM_SONNET_SESSION_CAP_PCT:-30}"
 
-# Фолбэк на Sonnet, если Gemini недоступен (упёрся в monthly spend cap, протух
-# ключ и т.п.). 1 = пре-флайт проба в начале прогона; при провале праймари-фаза
-# Gemini пропускается и весь синтез идёт на Sonnet через подписку Claude Code.
-# Реальный потолок проходов всё равно режется DREAM_SONNET_SESSION_CAP_PCT.
-DREAM_SONNET_FALLBACK="${DREAM_SONNET_FALLBACK:-1}"
-# Сколько проходов делает Sonnet в режиме фолбэка (когда Gemini дал 0 проходов и
-# DREAM_SONNET_MAX_RUNS не задан). Сессионный cap-pct всё равно может оборвать раньше.
 DREAM_SONNET_FALLBACK_RUNS="${DREAM_SONNET_FALLBACK_RUNS:-60}"
 
 # Запись результата сна нодой в домен dreams (~/brain/dreams/nodes). 1 = писать.
@@ -232,17 +180,10 @@ DREAM_SYNTHESIS_CAP="${DREAM_SYNTHESIS_CAP:-250}"
 # 0 = выкл (единая фаза, как раньше).
 DREAM_NREM_PASSES="${DREAM_NREM_PASSES:-20}"
 
-# Дедуп ленты дайджеста против недавних ночей (Gemini Flash). brain-dream варит
-# каждую ночь изолированно → один и тот же вывод может всплыть несколько ночей
-# подряд под другой формулировкой (content-hash дедуп кандидатов это не ловит:
-# он до синтеза, а Claude переформулирует). Слой поверх готового топ-10: Flash
-# сверяет сегодняшние инсайты с реально показанными за последние N дней
-# (.digest-published.jsonl) и гасит near-duplicate. Fail-open: при любой осечке
-# (нет ключа / Gemini упал / пустой реестр) лента публикуется целиком.
-# 1 = включено. Окно сравнения — DREAM_DIGEST_DEDUP_DAYS дней.
+# Печать топ-10 и ведение реестра публикаций без LLM.
+# Хэш-дедуп кандидатов выполняется отдельно, до синтеза.
 DREAM_DIGEST_DEDUP="${DREAM_DIGEST_DEDUP:-1}"
 DREAM_DIGEST_DEDUP_DAYS="${DREAM_DIGEST_DEDUP_DAYS:-5}"
-DREAM_DIGEST_DEDUP_MODEL="${DREAM_DIGEST_DEDUP_MODEL:-flash}"
 
 # Мост «наблюдения → сон»: поведенческий срез из pattern-mining session-manager.
 # Вход сна — граф: он видит, что ЗАПИСАНО, но не видит, что делают руками.
@@ -260,19 +201,12 @@ DREAM_OBSERVATIONS_MAX_CHARS="${DREAM_OBSERVATIONS_MAX_CHARS:-12000}"
 DREAM_OBSERVATIONS_CACHE_MAX_AGE_H="${DREAM_OBSERVATIONS_CACHE_MAX_AGE_H:-72}"
 
 LOG_FILE="$HOME/life/state/logs/brain-dream.log"
-# Переопределяется в тестах стабом; в проде всегда соседний gemini.sh.
-GEMINI_SH="${GEMINI_SH:-$ORCHESTRATOR_DIR/gemini.sh}"
 # Ворота стиля у записи (decision:ncf-style-by-audience-pipeline-skip-write-gate-ruled-out-2026-10-16).
 STYLE_GATE="${STYLE_GATE:-$ORCHESTRATOR_DIR/../tools/style_gate.py}"
 UTC_DATE="$(date -u +%F)"
 OUT_MD="$DREAM_OUT_DIR/dream-$UTC_DATE.md"
-OUT_PNG="$DREAM_OUT_DIR/dream-$UTC_DATE.png"
 CANDIDATES_FILE="$DREAM_OUT_DIR/.candidates.jsonl"
 CANDIDATES_LOCK="$DREAM_OUT_DIR/.candidates.lock"
-USAGE_SINK="$DREAM_OUT_DIR/.dream-usage.jsonl"
-USAGE_LOCK="$USAGE_SINK.lock"
-# Дочерние gemini.sh дописывают сюда фактический расход токенов.
-export GEMINI_USAGE_SINK="$USAGE_SINK"
 # Раздельный учёт Sonnet-фазы.
 SONNET_SINK="$DREAM_OUT_DIR/.dream-usage-sonnet.jsonl"
 SONNET_LOCK="$SONNET_SINK.lock"
@@ -298,15 +232,11 @@ PIDS=()
 LAUNCHED=0
 RUNS=0
 FAILS=0
-ITERATION=0
 DEADLINE_EPOCH=0
 DEADLINE_CUT=0
 STOP_REASON="not_started"
 STAGE="start"
-RUN_ENGINE="gemini"
-GEMINI_UNAVAILABLE=0
-GEMINI_LAUNCHED=0
-GEMINI_RUNS=0
+RUN_ENGINE="sonnet"
 SONNET_LAUNCHED=0
 STOP_REASON_SONNET="none"
 
@@ -355,8 +285,6 @@ register_temp_file "$CANDIDATES_FILE"
 register_temp_file "$CANDIDATES_LOCK"
 register_temp_file "$NODES_FILE"
 register_temp_file "$CLUSTERS_FILE"
-register_temp_file "$USAGE_SINK"
-register_temp_file "$USAGE_LOCK"
 register_temp_file "$SONNET_SINK"
 register_temp_file "$SONNET_LOCK"
 
@@ -375,7 +303,7 @@ is_nonneg_number() {
 validate_params() {
   local name value
 
-  for name in DREAM_MAX_RUNS DREAM_OVERRUN_RUNS DREAM_OVERRUN_MIN DREAM_CONCURRENCY \
+  for name in DREAM_SONNET_FALLBACK_RUNS DREAM_OVERRUN_RUNS DREAM_OVERRUN_MIN DREAM_SONNET_CONCURRENCY \
               DREAM_SATURATION_MIN_YIELD DREAM_SATURATION_CHECK_INTERVAL \
               DREAM_SYNTHESIS_CAP; do
     value="${!name}"
@@ -385,7 +313,12 @@ validate_params() {
     fi
   done
 
-  for name in DREAM_COST_LIMIT_USD DREAM_PRICE_IN_PER_M DREAM_PRICE_OUT_PER_M DREAM_SONNET_SESSION_CAP_PCT; do
+  if [[ -n "$DREAM_SONNET_MAX_RUNS" ]] && ! is_nonnegative_int "$DREAM_SONNET_MAX_RUNS"; then
+    log "stage=start error=invalid_integer param=DREAM_SONNET_MAX_RUNS value=$DREAM_SONNET_MAX_RUNS"
+    exit 1
+  fi
+
+  for name in DREAM_SONNET_SESSION_CAP_PCT; do
     value="${!name}"
     if ! is_nonneg_number "$value"; then
       log "stage=start error=invalid_number param=$name value=$value"
@@ -398,8 +331,8 @@ validate_params() {
     exit 1
   fi
 
-  if ((DREAM_CONCURRENCY < 1)); then
-    log "stage=start error=invalid_concurrency value=$DREAM_CONCURRENCY"
+  if ((DREAM_SONNET_CONCURRENCY < 1)); then
+    log "stage=start error=invalid_concurrency value=$DREAM_SONNET_CONCURRENCY"
     exit 1
   fi
 
@@ -423,10 +356,6 @@ check_dependencies() {
     fi
   done
 
-  if [[ ! -x "$GEMINI_SH" ]]; then
-    log "stage=start error=missing_dependency dependency=$GEMINI_SH"
-    missing=1
-  fi
 
   if ((missing != 0)); then
     exit 1
@@ -460,54 +389,6 @@ parse_deadline_epoch() {
 now_epoch() {
   date -u +%s
 }
-
-# Фактический расход Gemini в долларах: суммируем токены из sink-файла и
-# умножаем на цены за 1M. Печатаем число (доллары) с округлением до 6 знаков.
-spent_usd() {
-  if [[ ! -s "$USAGE_SINK" ]]; then
-    printf '0\n'
-    return 0
-  fi
-
-  jq -s -r \
-    --argjson pin "$DREAM_PRICE_IN_PER_M" \
-    --argjson pout "$DREAM_PRICE_OUT_PER_M" '
-      (map(.prompt_tokens // 0) | add // 0) as $in
-      | (map(.candidates_tokens // 0) | add // 0) as $out
-      | (($in / 1000000 * $pin) + ($out / 1000000 * $pout))
-      | (. * 1000000 | round) / 1000000
-    ' "$USAGE_SINK" 2>/dev/null || printf '0\n'
-}
-
-# Число уже учтённых вызовов Gemini (строк в sink).
-usage_calls() {
-  if [[ -s "$USAGE_SINK" ]]; then
-    wc -l < "$USAGE_SINK" | tr -d '[:space:]'
-  else
-    printf '0\n'
-  fi
-}
-
-# Достигнут ли денежный лимит. Лимит 0 = выключен.
-# Резервируем бюджет на проходы «в полёте»: их токены ещё не записаны в sink,
-# но деньги потратятся. Оцениваем их по средней цене завершённых проходов и
-# останавливаемся упреждающе — так фактический перебор за лимит держится в
-# пределах ~одного прохода, а не concurrency проходов.
-cost_limit_reached() {
-  local spent calls in_flight projected
-  awk "BEGIN{exit !($DREAM_COST_LIMIT_USD > 0)}" || return 1
-  spent="$(spent_usd)"
-  calls="$(usage_calls)"
-  in_flight=${#PIDS[@]}
-  if ((calls > 0 && in_flight > 0)); then
-    projected="$(awk "BEGIN{printf \"%.6f\", $spent + ($spent / $calls) * $in_flight}")"
-  else
-    projected="$spent"
-  fi
-  awk "BEGIN{exit !($projected >= $DREAM_COST_LIMIT_USD)}"
-}
-
-# --- Sonnet-фаза: вторая модель (сравнение расхода + fallback-продолжение) ---
 
 # Дописать расход Sonnet-вызова из claude-json (есть готовый total_cost_usd).
 record_sonnet_usage() {
@@ -565,9 +446,8 @@ sonnet_quota_reached() {
   awk "BEGIN{exit !($share >= $DREAM_SONNET_SESSION_CAP_PCT)}"
 }
 
-# Один проход Sonnet — зеркало run_generation_iteration, но через claude CLI.
+# Один проход Sonnet через claude-pool.
 # Кандидаты идут в общий CANDIDATES_FILE (помечены model:sonnet), расход — в
-# SONNET_SINK. Те же линзы/кластеры/сэмплы, что у Gemini → честное сравнение.
 run_sonnet_iteration() {
   local iteration="$1" mode="$2" domain_label="$3" lens_key="$4" lens_text="$5" context="$6" allowed_ids_json="$7"
   local instruction response result line normalized valid_count=0
@@ -667,31 +547,6 @@ $context"
   return 0
 }
 
-deadline_generation_open() {
-  local now
-
-  if ((LAUNCHED >= DREAM_MAX_RUNS)); then
-    STOP_REASON="max_runs"
-    return 1
-  fi
-
-  if cost_limit_reached; then
-    STOP_REASON="cost_limit"
-    return 1
-  fi
-
-  if ((DEADLINE_EPOCH > 0)); then
-    now="$(now_epoch)"
-    if ((now >= DEADLINE_EPOCH - 300)); then
-      DEADLINE_CUT=1
-      STOP_REASON="deadline_buffer"
-      return 1
-    fi
-  fi
-
-  STOP_REASON="running"
-  return 0
-}
 
 domain_root() {
   # Все доменные корни мозга по схеме ~/brain/<домен>/nodes. Домен dreams
@@ -770,7 +625,6 @@ body_slice() {
 }
 
 # Второй рубеж: вырезать значения токенов из текста ноды ПЕРЕД отправкой в
-# Gemini (первый рубеж — guard в engine не пускает их в ноты вовсе). Паттерны
 # синхронизированы с SECRET_PATTERNS в ~/brain/engine/server.py.
 redact_secrets() {
   sed -E \
@@ -1130,108 +984,6 @@ append_candidate() {
   } 9>"$CANDIDATES_LOCK"
 }
 
-run_generation_iteration() {
-  local iteration="$1"
-  local mode="$2"
-  local domain_label="$3"
-  local lens_key="$4"
-  local lens_text="$5"
-  local context="$6"
-  local allowed_ids_json="$7"
-  local instruction response line normalized valid_count=0
-
-  instruction="$lens_text
-
-Верни только JSONL без markdown и без пояснений вокруг.
-Стиль текста в полях title/insight/why: без противопоставлений «не X, а Y» / «Y, а не X» / «(не X)» и без оговорок «стоит отметить» — утверждение прямо; факт X, если нужен, отдельным предложением с причиной.
-Чаще всего срывается хвост «…, а не X» в конце фразы. Примеры правки:
-плохо: «Сбой вызван таймаутом, а не ошибкой кода.» → хорошо: «Сбой вызван таймаутом: запрос висел 30 с.»
-плохо: «Это системная проблема, а не разовая опечатка.» → хорошо: «Это системная проблема: повтор в 4 сессиях.»
-плохо: «Итог измерил качество метки, не модели.» → хорошо: «Итог измерил качество метки.»
-Перед выводом перечитай title/insight/why: оборотов «, а не», «, не …» и «(не …)» там быть не должно.
-Нужно 1-3 инсайта, каждый на отдельной строке, строго в формате:
-{\"title\":\"\",\"insight\":\"\",\"why\":\"\",\"ruled_out\":\"\",\"novelty\":\"obvious|non-obvious\",\"confidence\":0.7,\"source_ids\":[],\"domain\":\"\",\"lens\":\"\"}
-
-Правила:
-- опирайся только на source_ids из контекста;
-- source_ids должны быть id нод, которые реально использованы;
-- domain поставь \"$domain_label\" или более точный домен из контекста;
-- lens поставь \"$lens_key\";
-- ruled_out — что ты проверил и отбросил, с причиной, отдельным предложением («Версию про сеть отбросил: ping в норме.»); пусто, если нечего. Отброшенная версия живёт только в этом поле;
-- confidence — твоя уверенность 0.3-1.0, что инсайт точен И применим на практике; голый факт без применения — 0.3-0.5. Дефолт 0.7. 0.3-0.5 = гипотеза, 0.6-0.8 = вероятно, 0.9-1.0 = уверен, действие напрашивается;
-- insight и why пиши по-русски, конкретно и без общих советов."
-
-  if ! response="$("$GEMINI_SH" -m "${DREAM_GEMINI_MODEL:-flash}" stdin "$instruction" <<< "$context" 2>/dev/null)"; then
-    log "stage=generation event=gemini_failed iteration=$iteration mode=$mode lens=$lens_key"
-    return 1
-  fi
-
-  local objects
-  objects="$(printf '%s\n' "$response" \
-    | sed -E '/^[[:space:]]*```/d' \
-    | jq -c -R 'fromjson? // empty | if type=="array" then .[] else . end' 2>/dev/null || true)"
-
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-
-    if normalized="$(printf '%s\n' "$line" | jq -c -e \
-      --arg domain "$domain_label" \
-      --arg lens "$lens_key" \
-      --argjson allowed "$allowed_ids_json" '
-        select(type == "object")
-        | .title = (.title // "")
-        | .insight = (.insight // "")
-        | .why = (.why // "")
-        | .ruled_out = (if (.ruled_out | type) == "string" then .ruled_out else "" end)
-        | .novelty = (if .novelty == "obvious" or .novelty == "non-obvious" then .novelty else "non-obvious" end)
-        | .source_ids = (
-            if (.source_ids | type) == "array"
-            then [.source_ids[] | tostring | select(($allowed | index(.)) != null)]
-            else []
-            end
-          )
-        | .domain = (if (.domain | type) == "string" and (.domain | length) > 0 then .domain else $domain end)
-        | .lens = (if (.lens | type) == "string" and (.lens | length) > 0 then .lens else $lens end)
-        | .confidence = (
-            if (.confidence | type) == "number"
-            then (if .confidence < 0.3 then 0.3
-                  elif .confidence > 1.0 then 1.0
-                  else .confidence end)
-            else 0.7
-            end
-          )
-        | select((.title | type) == "string" and (.title | length) > 0)
-        | select((.insight | type) == "string" and (.insight | length) > 0)
-        | select((.why | type) == "string" and (.why | length) > 0)
-      ' 2>/dev/null)"; then
-      # Phase 2: добавить content_hash и provenance ДО append.
-      local _title _insight _hash _gen_at
-      _title=$(printf '%s' "$normalized" | jq -r '.title')
-      _insight=$(printf '%s' "$normalized" | jq -r '.insight')
-      _hash=$(content_hash_insight "$_title" "$_insight")
-      _gen_at=$(date -u +%FT%TZ)
-      normalized=$(printf '%s' "$normalized" | jq -c \
-        --arg h "$_hash" \
-        --arg dream_id "dream:$UTC_DATE" \
-        --argjson iter "$iteration" \
-        --arg mode "$mode" \
-        --arg target "$domain_label" \
-        --arg model "${DREAM_GEMINI_MODEL:-flash}" \
-        --argjson sample_ids "$allowed_ids_json" \
-        --arg gen_at "$_gen_at" \
-        '. + {content_hash: $h, provenance: {
-           dream_id: $dream_id, iteration: $iter, mode: $mode, target: $target,
-           sample_node_ids: $sample_ids, prompt_version: "v2",
-           model: $model, generated_at: $gen_at
-        }}')
-      append_candidate "$normalized"
-      valid_count=$((valid_count + 1))
-    fi
-  done <<< "$objects"
-
-  log "stage=generation event=gemini_ok iteration=$iteration mode=$mode lens=$lens_key candidates=$valid_count"
-  return 0
-}
 
 wait_for_one_job() {
   local pid status
@@ -1266,8 +1018,7 @@ launch_iteration() {
   local phase cross_modulo
   local -a selected selected_a selected_b lens_arr prompt_arr _widx
 
-  # Phase selection: NREM первые DREAM_NREM_PASSES итераций (Gemini phase),
-  # REM остальные. Для Sonnet phase (siter 0..N) ровно те же inputs.
+  # Первые DREAM_NREM_PASSES итераций — NREM, остальные — REM.
   if (( DREAM_NREM_PASSES > 0 )) && (( iteration < DREAM_NREM_PASSES )); then
     phase="nrem"
     lens_arr=("${NREM_LENS_KEYS[@]}")
@@ -1348,15 +1099,11 @@ launch_iteration() {
   context="$(build_context "${selected[@]}")"
   allowed_ids_json="$(ids_json_for_paths "${selected[@]}")"
 
-  if [[ "${RUN_ENGINE:-gemini}" == "sonnet" ]]; then
-    run_sonnet_iteration "$iteration" "$mode" "$domain_label" "$lens_key" "$lens_text" "$context" "$allowed_ids_json" &
-  else
-    run_generation_iteration "$iteration" "$mode" "$domain_label" "$lens_key" "$lens_text" "$context" "$allowed_ids_json" &
-  fi
+  run_sonnet_iteration "$iteration" "$mode" "$domain_label" "$lens_key" "$lens_text" "$context" "$allowed_ids_json" &
   PIDS+=("$!")
   LAUNCHED=$((LAUNCHED + 1))
 
-  log "stage=${RUN_ENGINE:-gemini} phase=$phase iterations_launched=$LAUNCHED runs=$RUNS active=${#PIDS[@]} mode=$mode lens=$lens_key target=\"$domain_label\""
+  log "stage=$RUN_ENGINE phase=$phase iterations_launched=$LAUNCHED runs=$RUNS active=${#PIDS[@]} mode=$mode lens=$lens_key target=\"$domain_label\""
 }
 
 # ── Линза `practice`: граф против практики ───────────────────────────────────
@@ -1388,11 +1135,6 @@ run_practice_pass() {
   if ! command -v python3 >/dev/null 2>&1; then
     PRACTICE_STATUS="no_python3"
     log "stage=practice event=skip reason=no_python3"
-    return 0
-  fi
-  if cost_limit_reached; then
-    PRACTICE_STATUS="cost_limit"
-    log "stage=practice event=skip reason=cost_limit spent=$(spent_usd)"
     return 0
   fi
   if ((DEADLINE_EPOCH > 0)) && (($(now_epoch) >= DEADLINE_EPOCH - 300)); then
@@ -1431,13 +1173,8 @@ run_practice_pass() {
   allowed="$(jq -c '.allowed_ids // []' "$OBSERVATIONS_SELECTION" 2>/dev/null || printf '[]')"
   label="practice/observations"
 
-  if [[ "$DREAM_SONNET_FALLBACK" == "1" ]] && ((GEMINI_UNAVAILABLE == 1)); then
-    engine="sonnet"
-    run_sonnet_iteration 0 "practice" "$label" "practice" "$PRACTICE_LENS_PROMPT" "$ctx" "$allowed" || true
-  else
-    engine="gemini"
-    run_generation_iteration 0 "practice" "$label" "practice" "$PRACTICE_LENS_PROMPT" "$ctx" "$allowed" || true
-  fi
+  engine="sonnet"
+  run_sonnet_iteration 0 "practice" "$label" "practice" "$PRACTICE_LENS_PROMPT" "$ctx" "$allowed" || true
 
   PRACTICE_LAUNCHED=1
   PRACTICE_STATUS="fed"
@@ -1542,19 +1279,6 @@ candidate_breakdown() {
   ' "$CANDIDATES_FILE"
 }
 
-token_usage_summary() {
-  if [[ ! -s "$USAGE_SINK" ]]; then
-    printf 'calls=0 in=0 out=0\n'
-    return 0
-  fi
-
-  jq -s -r '
-    {calls: length,
-     in: (map(.prompt_tokens // 0) | add // 0),
-     out: (map(.candidates_tokens // 0) | add // 0)}
-    | "calls=\(.calls) in=\(.in) out=\(.out)"
-  ' "$USAGE_SINK" 2>/dev/null || printf 'calls=0 in=0 out=0\n'
-}
 
 fallback_synthesis() {
   jq -r -s '
@@ -1709,31 +1433,22 @@ write_markdown_output() {
     printf -- '- Deadline UTC: %s\n' "${DREAM_DEADLINE_UTC:-none}"
     printf -- '- Deadline status at write: %s\n' "$(deadline_summary_line)"
     printf -- '- Overrun budget: %s runs, %s min\n' "$DREAM_OVERRUN_RUNS" "$DREAM_OVERRUN_MIN"
-    printf -- '- Gemini spent: $%s of $%s limit (in $%s/M, out $%s/M)\n' \
-      "$(spent_usd)" "$DREAM_COST_LIMIT_USD" "$DREAM_PRICE_IN_PER_M" "$DREAM_PRICE_OUT_PER_M"
-    printf -- '- Token usage: %s\n' "$(token_usage_summary)"
+    printf -- '- Token usage: %s\n' "$(token_usage_summary_sonnet)"
     printf -- '- Practice bridge: %s%s\n\n' "$PRACTICE_STATUS" \
       "$([[ "$PRACTICE_STATUS" == "fed" ]] && printf ' (%s наблюдений, источник %s)' \
         "$(jq -r '.stats.fed // 0' "$OBSERVATIONS_SELECTION" 2>/dev/null || printf '?')" \
         "$(jq -r '.source // "?"' "$OBSERVATIONS_SELECTION" 2>/dev/null || printf '?')")"
 
-    if [[ "$DREAM_SONNET_COMPARE" == "1" ]]; then
-      printf '## Сравнение Gemini vs Sonnet\n\n'
-      printf 'Gemini оплачивается из API-кошелька ($); Sonnet идёт через подписку Claude Code (лимит %s вызовов / 5ч окно), поэтому его реальный расход — доля сессии, а не доллары. API-цена Sonnet справа — справочная, в биллинге не списывается.\n\n' "$DREAM_SONNET_SESSION_LIMIT_CALLS"
-      printf -- '| Модель | Проходов | Токены (in/out) | Реальный расход | Справочно (API-прайс) |\n'
-      printf -- '|---|---|---|---|---|\n'
-      printf -- '| Gemini (%s) | %s | %s | **$%s** из API-баланса | — |\n' \
-        "${DREAM_GEMINI_MODEL:-flash}" "$GEMINI_LAUNCHED" \
-        "$(token_usage_summary | sed -E 's/calls=[0-9]+ in=([0-9]+) out=([0-9]+)/\1 \/ \2/')" "$(spent_usd)"
-      printf -- '| Sonnet (%s) | %s | %s | **%s%% сессии** (%s / %s вызовов) | $%s |\n' \
-        "$DREAM_SONNET_MODEL" "$SONNET_LAUNCHED" \
-        "$(token_usage_summary_sonnet | sed -E 's/calls=[0-9]+ in=([0-9]+) out=([0-9]+)/\1 \/ \2/')" \
-        "$(sonnet_session_share_pct)" "$(sonnet_calls)" "$DREAM_SONNET_SESSION_LIMIT_CALLS" "$(spent_usd_sonnet)"
-      printf -- '\n- Sonnet stop reason: %s (cap %s%% = %s вызовов)\n' "$STOP_REASON_SONNET" \
-        "$DREAM_SONNET_SESSION_CAP_PCT" \
-        "$(awk -v l="$DREAM_SONNET_SESSION_LIMIT_CALLS" -v p="$DREAM_SONNET_SESSION_CAP_PCT" 'BEGIN{printf "%d", l*p/100}')"
-      printf -- '- Примечание: claude CLI тащит ~32K системного контекста на вызов → input-токены Sonnet за проход на порядок больше Gemini.\n\n'
-    fi
+    printf '## Sonnet\n\n'
+    printf '| Модель | Проходов | Токены (in/out) | Доля сессии | Справочная API-цена |\n|---|---|---|---|---|\n'
+    printf -- '| Sonnet (%s) | %s | %s | **%s%% сессии** (%s / %s вызовов) | $%s |\n' \
+      "$DREAM_SONNET_MODEL" "$SONNET_LAUNCHED" \
+      "$(token_usage_summary_sonnet | sed -E 's/calls=[0-9]+ in=([0-9]+) out=([0-9]+)/\1 \/ \2/')" \
+      "$(sonnet_session_share_pct)" "$(sonnet_calls)" "$DREAM_SONNET_SESSION_LIMIT_CALLS" "$(spent_usd_sonnet)"
+    printf -- '\n- Sonnet stop reason: %s (cap %s%% = %s вызовов)\n' "$STOP_REASON_SONNET" \
+      "$DREAM_SONNET_SESSION_CAP_PCT" \
+      "$(awk -v l="$DREAM_SONNET_SESSION_LIMIT_CALLS" -v p="$DREAM_SONNET_SESSION_CAP_PCT" 'BEGIN{printf "%d", l*p/100}')"
+
 
     printf '## Синтез\n\n'
     printf '%s\n\n' "$synthesis_text"
@@ -1744,10 +1459,8 @@ write_markdown_output() {
     candidate_breakdown "domain"
     printf '\n### By lens\n\n'
     candidate_breakdown "lens"
-    if [[ "$DREAM_SONNET_COMPARE" == "1" ]]; then
-      printf '\n### By model\n\n'
-      candidate_breakdown "model"
-    fi
+    printf '\n### By model\n\n'
+    candidate_breakdown "model"
     printf '\n'
   } > "$OUT_MD"
 }
@@ -1887,8 +1600,6 @@ write_dream_node() {
     printf -- "observed_at: '%s'\n" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     printf -- "date: '%s'\n" "$UTC_DATE"
     printf -- 'domains: [%s]\n' "$(printf '%s' "$DREAM_DOMAINS" | sed 's/ /, /g')"
-    printf -- 'gemini_passes: %s\n' "$GEMINI_LAUNCHED"
-    printf -- 'gemini_cost_usd: %s\n' "$(spent_usd)"
     printf -- 'sonnet_passes: %s\n' "$SONNET_LAUNCHED"
     printf -- 'sonnet_calls: %s\n' "$(sonnet_calls)"
     printf -- 'sonnet_session_limit: %s\n' "$DREAM_SONNET_SESSION_LIMIT_CALLS"
@@ -1952,12 +1663,8 @@ fallback_titles_from_candidates() {
   jq -r -s '.[0:10] | to_entries[] | ((.key + 1) | tostring) + ". " + .value.title' "$CANDIDATES_FILE"
 }
 
-# Дедуп ленты против недавних ночей. Тащит топ-10 из ## Синтез готового OUT_MD,
-# Gemini Flash сверяет с показанным за DREAM_DIGEST_DEDUP_DAYS дней
-# (.digest-published.jsonl), гасит повторы и кладёт дедупнутый нумерованный блок
-# в DIGEST_TITLES_FILE (его потом берёт digest_title_block). Сам инструмент
-# дописывает показанное в реестр и компактит его. Fail-open: при любой осечке
-# инструмент печатает все заголовки (или возвращает !=0) — лента не страдает.
+# Печатает топ-10 из синтеза и обновляет реестр публикаций.
+# При ошибке парсинга digest_title_block использует исходные заголовки.
 run_digest_dedup() {
   local tool="$BRAIN_DREAM_REPO/tools/dream-digest-dedup.py"
   if [[ ! -f "$tool" ]]; then
@@ -1969,8 +1676,6 @@ run_digest_dedup() {
        --registry "$DIGEST_REGISTRY" \
        --today "$UTC_DATE" \
        --days "$DREAM_DIGEST_DEDUP_DAYS" \
-       --gemini "$GEMINI_SH" \
-       --model "$DREAM_DIGEST_DEDUP_MODEL" \
        --max-titles 10 \
        > "$DIGEST_TITLES_FILE" 2> >(while IFS= read -r l; do log "stage=digest-dedup $l"; done); then
     log "stage=digest-dedup event=done titles_file=$DIGEST_TITLES_FILE"
@@ -2158,9 +1863,9 @@ telegram_summary_text() {
 
   titles="$(digest_title_block)"
 
-  printf 'Сон мозга %s UTC\n\n%s\n\nGemini: $%s / $%s (%s)\nСтоп: %s\nФайл: %s\n' \
-    "$UTC_DATE" "$titles" "$(spent_usd)" "$DREAM_COST_LIMIT_USD" \
-    "$(token_usage_summary)" "$STOP_REASON" "$OUT_MD"
+  printf 'Сон мозга %s UTC\n\n%s\n\nSonnet: %s%% сессии (%s)\nСтоп: %s\nФайл: %s\n' \
+    "$UTC_DATE" "$titles" "$(sonnet_session_share_pct)" \
+    "$(token_usage_summary_sonnet)" "$STOP_REASON" "$OUT_MD"
 }
 
 # Отправить ОДНО фото по URL (обложка с Higgsfield CloudFront) с подписью.
@@ -2189,129 +1894,11 @@ telegram_caption_single() {
 
   titles="$(digest_title_block)"
 
-  spend="Gemini: \$$(spent_usd)"
-  if [[ "$DREAM_SONNET_COMPARE" == "1" ]]; then
-    spend="$spend | Sonnet: $(sonnet_session_share_pct)% сессии ($(sonnet_calls)/$DREAM_SONNET_SESSION_LIMIT_CALLS)"
-  fi
+  spend="Sonnet: $(sonnet_session_share_pct)% сессии ($(sonnet_calls)/$DREAM_SONNET_SESSION_LIMIT_CALLS)"
 
   printf '🌙 Сон мозга %s\n\n%s\n\n%s' "$UTC_DATE" "$titles" "$spend" | cut -c1-1024
 }
 
-load_gemini_key() {
-  local env_file="$HOME/.config/gemini/config.env"
-  local key
-
-  GEMINI_API_KEY_VALUE="${GEMINI_API_KEY:-}"
-
-  if [[ -z "$GEMINI_API_KEY_VALUE" && -f "$env_file" ]]; then
-    key="$(
-      set +e +u
-      # shellcheck source=/dev/null
-      source "$env_file" >/dev/null 2>&1
-      set +x
-      printf '%s\n' "${GEMINI_API_KEY:-}"
-    )"
-    GEMINI_API_KEY_VALUE="$key"
-  fi
-
-  if [[ -z "$GEMINI_API_KEY_VALUE" ]]; then
-    log "stage=image event=missing_gemini_api_key"
-    return 1
-  fi
-
-  return 0
-}
-
-# Пре-флайт проба Gemini тем же путём, что и генерация (gemini.sh + та же модель),
-# чтобы поймать недоступность ДО запуска 500 заведомо провальных проходов.
-# gemini.sh при 429/cap печатает текст ошибки и отдаёт exit 0 (тихий фейл),
-# поэтому помимо кода выхода проверяем тело ответа на сигнатуры ошибок API.
-# Возврат: 0 = Gemini отвечает, 1 = недоступен (cap / ключ / сеть).
-gemini_available() {
-  local out
-  out="$(printf 'ping\n' | timeout 30 "$GEMINI_SH" -m "${DREAM_GEMINI_MODEL:-flash}" stdin "Ответь одним словом: ok" 2>/dev/null)" || return 1
-  [[ -z "${out//[[:space:]]/}" ]] && return 1
-  if printf '%s' "$out" | grep -qiE 'spending cap|RESOURCE_EXHAUSTED|exceeded|quota|expired|INVALID|PERMISSION_DENIED|UNAUTHENTICATED|"error"'; then
-    return 1
-  fi
-  return 0
-}
-
-top_three_theme() {
-  local titles
-
-  titles="$(extract_top_titles "$OUT_MD" | sed -n '1,3p' | tr '\n' '; ' || true)"
-  if [[ -z "$titles" ]]; then
-    titles="ночной синтез knowledge graph; топ-10 инсайтов; связи между доменами"
-  fi
-
-  printf '%s\n' "$titles"
-}
-
-best_effort_cover_image() {
-  local now max_gemini_with_overrun body_file response_file image_prompt image_data caption
-
-  if ! command -v base64 >/dev/null 2>&1; then
-    log "stage=image event=skip_missing_base64"
-    return 0
-  fi
-
-  max_gemini_with_overrun=$((DREAM_MAX_RUNS + DREAM_OVERRUN_RUNS))
-  if ((LAUNCHED + 1 > max_gemini_with_overrun)); then
-    log "stage=image event=skip_budget launched=$LAUNCHED max_with_overrun=$max_gemini_with_overrun"
-    return 0
-  fi
-
-  if ((DEADLINE_EPOCH > 0)); then
-    now="$(now_epoch)"
-    if ((now >= DEADLINE_EPOCH)); then
-      log "stage=image event=skip_deadline"
-      return 0
-    fi
-  fi
-
-  if ! load_gemini_key; then
-    return 0
-  fi
-
-  body_file="$(mktemp "$DREAM_OUT_DIR/.brain-dream-image-body.XXXXXX")" || return 0
-  response_file="$(mktemp "$DREAM_OUT_DIR/.brain-dream-image-response.XXXXXX")" || {
-    rm -f "$body_file" 2>/dev/null || true
-    return 0
-  }
-
-  image_prompt="Абстрактная обложка для ночного синтеза knowledge graph. Темы: $(top_three_theme). Визуальный стиль: тихая ночная карта знаний, тонкие светящиеся связи между узлами, ощущение глубокого анализа, без текста, без логотипов, без интерфейсных элементов."
-
-  jq -n --arg text "$image_prompt" '{contents:[{parts:[{text:$text}]}]}' > "$body_file"
-
-  if ! curl -fs -o "$response_file" -X POST \
-    -H "Content-Type: application/json" \
-    -H "x-goog-api-key: ${GEMINI_API_KEY_VALUE}" \
-    --data @"$body_file" \
-    "https://generativelanguage.googleapis.com/v1beta/models/${DREAM_IMAGE_MODEL}:generateContent"; then
-    log "stage=image event=generateContent_failed"
-    rm -f "$body_file" "$response_file" 2>/dev/null || true
-    return 0
-  fi
-
-  image_data="$(jq -r '[.candidates[0].content.parts[]? | (.inlineData.data // .inline_data.data // empty)][0] // empty' "$response_file" 2>/dev/null || true)"
-  if [[ -z "$image_data" || "$image_data" == "null" ]]; then
-    log "stage=image event=no_inline_image"
-    rm -f "$body_file" "$response_file" 2>/dev/null || true
-    return 0
-  fi
-
-  if printf '%s' "$image_data" | base64 -d > "$OUT_PNG" 2>/dev/null; then
-    log "stage=image event=png_written path=$OUT_PNG"
-    caption="Сон мозга $UTC_DATE UTC"
-    send_telegram_photo "$OUT_PNG" "$caption"
-  else
-    log "stage=image event=base64_decode_failed"
-    rm -f "$OUT_PNG" 2>/dev/null || true
-  fi
-
-  rm -f "$body_file" "$response_file" 2>/dev/null || true
-}
 
 main() {
   local cluster_count node_count count synthesis_text summary_text stage_history synthesis_file
@@ -2326,7 +1913,7 @@ main() {
   _DREAM_RECENT_WEIGHT_PCT_BASE="${DREAM_RECENT_WEIGHT_PCT:-70}"
   export _DREAM_RECENT_WEIGHT_PCT_BASE
 
-  log "stage=start domains=\"$DREAM_DOMAINS\" max_runs=$DREAM_MAX_RUNS deadline=${DREAM_DEADLINE_UTC:-none} concurrency=$DREAM_CONCURRENCY nrem_passes=$DREAM_NREM_PASSES gemini_backend=$DREAM_GEMINI_BACKEND"
+  log "stage=start domains=\"$DREAM_DOMAINS\" max_runs=${DREAM_SONNET_MAX_RUNS:-$DREAM_SONNET_FALLBACK_RUNS} deadline=${DREAM_DEADLINE_UTC:-none} concurrency=$DREAM_SONNET_CONCURRENCY nrem_passes=$DREAM_NREM_PASSES"
 
   STAGE="collect"
   log "stage=collect event=start"
@@ -2336,7 +1923,6 @@ main() {
   log "stage=collect event=done nodes=$node_count clusters=$cluster_count"
 
   : > "$CANDIDATES_FILE"
-  : > "$USAGE_SINK"
   : > "$SONNET_SINK"
   # Сбрасываем прошлогодний дедупнутый блок: при выключенном дедупе или раннем
   # выходе digest_title_block не должен подхватить заголовки вчерашней ночи.
@@ -2361,82 +1947,14 @@ main() {
     log "stage=generation event=feedback_bias lens_rot=${#WEIGHTED_REM_IDX[@]} cluster_rot=${#WEIGHTED_CLUSTER_IDX[@]} base_clusters=$cluster_count"
   fi
 
-  STAGE="generation"
   if ((cluster_count > 0)); then
-    log "stage=generation event=start"
-    # Пре-флайт проба Gemini. Если он недоступен (spend cap / протухший ключ) и
-    # включён фолбэк — праймари-цикл Gemini пропускается (gate ниже), весь синтез
-    # уходит на Sonnet через подписку Claude Code (фаза 2 принудительно ниже).
-    if [[ "$DREAM_SONNET_FALLBACK" == "1" ]] && ! gemini_available; then
-      GEMINI_UNAVAILABLE=1
-      RUN_ENGINE="sonnet"
-      STOP_REASON="gemini_unavailable"
-      log "stage=generation event=gemini_unavailable fallback=sonnet"
-    fi
-    # Cap страхует от бесконечного цикла, если sample_paths постоянно даёт
-    # пустоту (skip_empty_sample не инкрементирует LAUNCHED, значит max_runs
-    # сам по себе не остановит). По аналогии с sonnet-циклом ниже.
-    local iteration_cap=$((DREAM_MAX_RUNS * 3 + 10))
-    local _gsat_prev=0 _gsat_since=0
-    while [[ "$RUN_ENGINE" == "gemini" ]] && deadline_generation_open && ((ITERATION < iteration_cap)); do
-      while ((${#PIDS[@]} >= DREAM_CONCURRENCY)); do
-        wait_for_one_job
-      done
-
-      if launch_iteration "$ITERATION" "$cluster_count"; then
-        ITERATION=$((ITERATION + 1))
-      else
-        ITERATION=$((ITERATION + 1))
-      fi
-
-      if saturation_reached _gsat_prev _gsat_since gemini; then
-        STOP_REASON="saturation"
-        break
-      fi
-
-      # Пейсинг под free-tier лимит (20 запросов/мин у gemini-2.5-flash):
-      # пауза между запусками держит нас заметно ниже лимита.
-      sleep "${DREAM_SLEEP:-0}"
-    done
-    if [[ "$RUN_ENGINE" == "gemini" ]] && ((ITERATION >= iteration_cap)) && [[ "$STOP_REASON" == "running" ]]; then
-      STOP_REASON="iteration_cap"
-      log "stage=generation event=iteration_cap_hit iterations=$ITERATION launched=$LAUNCHED cap=$iteration_cap"
-    fi
-  else
-    STOP_REASON="no_nodes"
-    log "stage=generation event=skip_no_nodes"
-  fi
-
-  log "stage=generation event=drain_start iterations_launched=$LAUNCHED active=${#PIDS[@]} reason=$STOP_REASON"
-  while ((${#PIDS[@]} > 0)); do
-    wait_for_one_job
-  done
-  log "stage=generation event=done iterations_launched=$LAUNCHED runs=$RUNS failed=$FAILS reason=$STOP_REASON"
-
-  GEMINI_LAUNCHED=$LAUNCHED
-  GEMINI_RUNS=$RUNS
-
-  # ФАЗА 2 (опц.): Sonnet прогоняет те же проходы, что Gemini — для сравнения
-  # расхода и как продолжение, если Gemini рано упёрся в денежный лимит.
-  if { [[ "$DREAM_SONNET_COMPARE" == "1" ]] || ((GEMINI_UNAVAILABLE == 1)); } && ((cluster_count > 0)); then
-    local sonnet_target=$GEMINI_LAUNCHED siter=0 now
-    if [[ -n "$DREAM_SONNET_MAX_RUNS" ]]; then
-      # Абсолютный override: и понижает, и поднимает. Полезно, когда Sonnet
-      # должен идти глубже Gemini (Gemini ограничен cost limit, Sonnet — нет,
-      # он расходует не доллары, а долю подписочной сессии — отдельный
-      # предохранитель DREAM_SONNET_SESSION_CAP_PCT).
-      sonnet_target=$DREAM_SONNET_MAX_RUNS
-    elif ((GEMINI_UNAVAILABLE == 1)); then
-      # Фолбэк: Gemini дал 0 проходов, поэтому таргет = свой дефолт, а не 0.
-      sonnet_target=$DREAM_SONNET_FALLBACK_RUNS
-    fi
+    local sonnet_target=${DREAM_SONNET_MAX_RUNS:-$DREAM_SONNET_FALLBACK_RUNS} siter=0 now
     STAGE="sonnet"
     RUN_ENGINE="sonnet"
     STOP_REASON_SONNET="completed"
     log "stage=sonnet event=start target_passes=$sonnet_target session_cap=${DREAM_SONNET_SESSION_CAP_PCT}% session_limit=$DREAM_SONNET_SESSION_LIMIT_CALLS model=$DREAM_SONNET_MODEL concurrency=$DREAM_SONNET_CONCURRENCY"
     # siter-кап страхует от бесконечного цикла, если сэмплы пустые.
-    # Чекпоинт насыщения seed-им текущим счётчиком: в фазе сравнения в файле уже
-    # лежат Gemini-кандидаты, и мерить надо именно прирост от Sonnet.
+    # Измеряем прирост кандидатов от текущего значения.
     local _ssat_prev _ssat_since=0
     _ssat_prev="$(candidate_count)"
     while ((SONNET_LAUNCHED < sonnet_target && siter < sonnet_target * 2 + 5)); do
@@ -2461,8 +1979,12 @@ main() {
     while ((${#PIDS[@]} > 0)); do
       wait_for_one_job
     done
-    RUN_ENGINE="gemini"
+    STOP_REASON="$STOP_REASON_SONNET"
+    [[ "$STOP_REASON" == "deadline_buffer" ]] && DEADLINE_CUT=1
     log "stage=sonnet event=done launched=$SONNET_LAUNCHED reason=$STOP_REASON_SONNET session_share=$(sonnet_session_share_pct)% ref_api_cost=\$$(spent_usd_sonnet)"
+  else
+    STOP_REASON="no_nodes"
+    log "stage=generation event=skip_no_nodes"
   fi
 
   # Поведенческий проход: один вызов модели по агрегату наблюдений. Кандидаты
@@ -2483,15 +2005,12 @@ main() {
 
   count="$(candidate_count)"
   if ((count == 0)); then
-    # Отличаем "движок упал" (все вызовы зафейлились — Gemini cap И/ИЛИ Sonnet
-    # недоступен) от честной "свежих инсайтов нет" ночи. RUNS = суммарно успешных
-    # проходов (gemini+sonnet), FAILS = суммарно зафейленных. RUNS==0 при FAILS>0
-    # значит ни один движок не ответил → это поломка, а не пустой сон.
+    # Ошибки всех вызовов означают недоступность движка.
     if ((RUNS == 0 && FAILS > 0)); then
-      log "stage=synthesis event=no_candidates cause=engine_failure failed=$FAILS gemini_launched=$GEMINI_LAUNCHED sonnet_launched=$SONNET_LAUNCHED"
+      log "stage=synthesis event=no_candidates cause=engine_failure failed=$FAILS sonnet_launched=$SONNET_LAUNCHED"
       stage_history="collect,generation,engine-failure"
-      write_markdown_output "Сон не дал кандидатов: движок генерации недоступен — все $FAILS вызовов зафейлились. Проверь Gemini spend cap (ai.studio/spend) и доступность Sonnet-подписки." "$count" "$stage_history"
-      send_telegram_message "⚠️ brain-dream: движок генерации НЕДОСТУПЕН — все $FAILS вызовов зафейлились, сон пуст. Вероятно Gemini уперся в spend cap, а Sonnet-фолбэк тоже не ответил."$'\n'"Файл: $OUT_MD"
+      write_markdown_output "Сон не дал кандидатов: движок генерации недоступен — все $FAILS вызовов зафейлились. Проверь доступность Sonnet-подписки." "$count" "$stage_history"
+      send_telegram_message "⚠️ brain-dream: движок генерации НЕДОСТУПЕН — все $FAILS вызовов зафейлились, сон пуст. Sonnet не ответил."$'\n'"Файл: $OUT_MD"
       exit 3
     fi
     log "stage=synthesis event=no_candidates cause=no_new_insights"
@@ -2527,9 +2046,7 @@ main() {
     write_dream_node "$synthesis_text"
   fi
 
-  # Дедуп ленты против недавних ночей (Gemini Flash) ПЕРЕД публикацией в TG.
-  # Гасит near-duplicate инсайты, уже показанные за последние дни. OUT_MD/Notion
-  # остаются полным записями — фильтруется только показываемый в TG топ-10.
+  # Готовим заголовки для TG и обновляем реестр публикаций.
   if [[ "$DREAM_DIGEST_DEDUP" == "1" ]]; then
     STAGE="digest-dedup"
     run_digest_dedup
@@ -2564,7 +2081,7 @@ main() {
     fi
   fi
 
-  log "stage=done gemini_launched=$GEMINI_LAUNCHED gemini_spent=\$$(spent_usd) sonnet_launched=$SONNET_LAUNCHED sonnet_session_share=$(sonnet_session_share_pct)% candidates=$count output=$OUT_MD"
+  log "stage=done sonnet_launched=$SONNET_LAUNCHED sonnet_session_share=$(sonnet_session_share_pct)% candidates=$count output=$OUT_MD"
 }
 
 main "$@"

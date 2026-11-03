@@ -19,7 +19,7 @@ from typing import Callable, Mapping, Sequence
 DREAMS = Path(os.environ.get("DREAM_NODE_ROOT", str(Path.home() / "brain" / "dreams")))
 DOMAINS = ("personal", "infra", "marquiz", "travelmart", "skvo", "indie", "govori")
 NODE_TYPES = ("note", "decision", "lesson")
-DEFAULT_JUDGE_CMD = ["gemini", "-m", "gemini-2.5-flash", "-p", "{PROMPT}"]
+DEFAULT_JUDGE_CMD = ["claude-bg-remote", "--label", "dream-judge", "--model", "claude-haiku-4-5-20251001", "--no-session-persistence", "--", "{PROMPT}"]
 
 
 @dataclass(frozen=True)
@@ -339,7 +339,7 @@ def promotion_prompt(
 def extract_json_object(text: str) -> str:
     """Вырезать первый JSON-объект из вывода LLM.
 
-    CLI-судьи (claude -p, gemini) оборачивают JSON в ```-фенсы и/или
+    CLI-судьи (claude -p) оборачивают JSON в ```-фенсы и/или
     сопровождают текстом — голый json.loads на весь stdout не работает.
     """
     start = text.find("{")
@@ -697,7 +697,7 @@ def kill_switch_path() -> Path:
 
 def resolve_judge_cmd() -> list[str]:
     """env-override судьи: PROMOTE_JUDGE_CMD, иначе GROOM_JUDGE_CMD (общесемейный),
-    иначе дефолтный gemini. Формат — JSON-массив argv с "{PROMPT}"."""
+    иначе Haiku через claude-bg-remote (как в crontab). Формат — JSON-массив argv с "{PROMPT}"."""
     for env_name in ("PROMOTE_JUDGE_CMD", "GROOM_JUDGE_CMD"):
         raw = os.environ.get(env_name)
         if not raw:
