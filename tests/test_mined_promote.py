@@ -249,5 +249,20 @@ class MinedPromoteTests(unittest.TestCase):
         self.assertEqual(record["action"], "defer")
 
 
+class PromotedBodyTest(unittest.TestCase):
+    def test_provenance_from_coordinates_and_gate_line_removed(self):
+        body = (
+            "Решение X.\n\n"
+            "Координаты: chat_id=-1001304880952; message_ids=[15333, 15334]\n"
+            "Candidate-нода (человек-гейт): проверить и промоутнуть в боевой домен или удалить."
+        )
+        candidate = mock.Mock(body=body, frontmatter={})
+        out = mined_promote.promoted_body(candidate, "2026-10-30T00:00:00+00:00", 0.75)
+        self.assertNotIn("человек-гейт", out)
+        self.assertIn("- chat: -1001304880952", out)
+        self.assertIn("- message_ids: [15333, 15334]", out)
+        self.assertIn("- promoted_at: 2026-10-30T00:00:00+00:00", out)
+
+
 if __name__ == "__main__":
     unittest.main()

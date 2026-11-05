@@ -437,24 +437,45 @@ def promoted_node_id(candidate_id: str, node_type: str) -> str:
     return node_id
 
 
+_COORDS_RE = re.compile(
+    r"^Координаты:\s*chat_id=(?P<chat>-?\d+);\s*message_ids=\[(?P<ids>[^\]]*)\]\s*$",
+    re.MULTILINE,
+)
+_GATE_LINE_RE = re.compile(r"^Candidate-нода \(человек-гейт\).*\n?", re.MULTILINE)
+
+
 def promoted_body(
     candidate: Candidate,
     promoted_at: str,
     judge_confidence: float,
 ) -> str:
-    """Добавить к statement явный блок провенанса."""
+    """Добавить к statement явный блок провенанса.
+
+    miner-publish кладёт chat/message_ids только в строку «Координаты» тела,
+    поэтому при пустом frontmatter провенанс берём оттуда. Строку «человек-гейт»
+    снимаем: в боевом домене она читалась как непройденная проверка.
+    """
     frontmatter = candidate.frontmatter
+    body = _GATE_LINE_RE.sub("", candidate.body).rstrip()
+    chat = frontmatter.get("chat", "")
+    message_ids = frontmatter.get("message_ids", [])
+    coords = _COORDS_RE.search(body)
+    if coords:
+        chat = chat or coords.group("chat")
+        if not message_ids:
+            message_ids = [
+                int(value) for value in re.findall(r"\d+", coords.group("ids"))
+            ]
     provenance = [
         "",
         "Провенанс:",
-        f"- chat: {frontmatter.get('chat', '')}",
-        "- message_ids: "
-        + json.dumps(frontmatter.get("message_ids", []), ensure_ascii=False),
+        f"- chat: {chat}",
+        "- message_ids: " + json.dumps(message_ids, ensure_ascii=False),
         f"- mined_at: {frontmatter.get('mined_at', '')}",
         f"- promoted_at: {promoted_at}",
         f"- judge_conf: {judge_confidence:.2f}",
     ]
-    return candidate.body.rstrip() + "\n" + "\n".join(provenance).lstrip("\n") + "\n"
+    return body + "\n" + "\n".join(provenance).lstrip("\n") + "\n"
 
 
 def append_state(
