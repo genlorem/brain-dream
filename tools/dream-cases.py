@@ -534,6 +534,9 @@ SPARK_TASK = """Дело сна v2 {cid} (журнал ~/brain/dreams/.cases, д
 4. Итог — ровно одна команда:
    DREAM_CASES_MODE=on python3 ~/Projects/brain-dream/tools/dream-cases.py outcome --case {cid} --result <pr|done|report|noise> --evidence "<URL PR | коммит | id узла | одна фраза почему>"
    `noise` — находка ложная или не стоит работы.
+5. После `outcome` с результатом pr|done|noise ответа владельца не ждёшь: сразу архивируй свою сессию —
+   curl -sS -X POST localhost:3007/api/session/exit-cc -d '{"sessionId":"<свой sid>"}' (последним действием хода).
+   Результат report — владельцу нужно решение, сессию не закрывать.
 Наружу (люди, деньги, сообщения) ничего не отправлять.
 """
 
