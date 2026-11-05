@@ -209,7 +209,8 @@ class PhaseThreeTest(NightTest):
     def test_answers_close_drop_and_task(self):
         text = "## Синтез\n" + "".join(f"## {i}. Т{i}\n**Суть:** с\n**Действие:** д\n" for i in range(1, 4))
         self.write("2026-10-01", text)
-        self.run_night("2026-10-01", [jev_answer(actor="owner")] * 3, [vec(i) for i in range(3)])
+        with mock.patch.object(dc, "CAP_CARDS", 3):
+            self.run_night("2026-10-01", [jev_answer(actor="owner")] * 3, [vec(i) for i in range(3)])
         self.answer("case:2026-10-01-1", "ack")
         self.answer("case:2026-10-01-2", "noise")
         self.answer("case:2026-10-01-3", "task")
@@ -247,6 +248,33 @@ class PhaseThreeTest(NightTest):
         self.run_night("2026-10-02", [jev_answer(case="C1", sev="critical"), jev_answer(case="new")],
                        [vec(0), vec(2)])
         self.assertEqual(self.spawned.count("case:2026-10-01-1"), 1)
+
+    def test_team_repo_goes_to_card(self):
+        text = ("## Синтез\n## 1. Travelmart: роли Keycloak не совпадают\n**Суть:** с\n**Действие:** д\n"
+                "## 2. VIP-8050: виджет держится на списке доменов\n**Суть:** с\n**Действие:** д\n")
+        self.write("2026-10-01", text)
+        with mock.patch.object(dc, "CAP_CARDS", 3):
+            self.run_night("2026-10-01", [jev_answer(actor="agent"), jev_answer(actor="agent")], [vec(0), vec(1)])
+        self.assertEqual(self.spawned, [])
+        self.assertEqual(self.sent, ["case:2026-10-01-1", "case:2026-10-01-2"])
+        self.assertEqual(sum(e["event"] == "team_card" for e in self.events()), 2)
+
+    def test_card_cap_one_and_only_high(self):
+        text = "## Синтез\n" + "".join(f"## {i}. Т{i}\n**Суть:** с\n**Действие:** д\n" for i in range(1, 4))
+        self.write("2026-10-01", text)
+        m = self.run_night("2026-10-01", [jev_answer(actor="owner", sev="medium"), jev_answer(actor="owner", sev="high"),
+                                          jev_answer(actor="owner", sev="critical")], [vec(i) for i in range(3)])
+        self.assertEqual(self.sent, ["case:2026-10-01-3"])  # critical первым, потолок 1
+        self.assertEqual(m["capped_card"], 1)
+        self.assertEqual(m["quiet_card"], 1)
+
+    def test_pending_owner_card_passes_any_severity(self):
+        self.write("2026-10-01")
+        self.run_night("2026-10-01", [jev_answer(actor="agent", sev="low"), jev_answer(actor="watch")], [vec(0), vec(1)])
+        dc.outcome(dc.Ledger(str(self.state)), "case:2026-10-01-1", "report", "нужен владелец")
+        self.write("2026-10-02", "## Синтез\n")
+        self.run_night("2026-10-02", [], [])
+        self.assertEqual(self.sent, ["case:2026-10-01-1"])
 
 
 if __name__ == "__main__":

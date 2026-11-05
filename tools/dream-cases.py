@@ -46,7 +46,10 @@ T_WATCH = float(os.environ.get("DREAM_CASES_T_WATCH", "0.5"))
 T_CLOSE = float(os.environ.get("DREAM_CASES_T_CLOSE", "0.8"))
 T_VERIFY = float(os.environ.get("DREAM_CASES_T_VERIFY", "0.5"))
 FALLBACK_COS = float(os.environ.get("DREAM_CASES_FALLBACK_COS", "0.75"))
-CAP_CARDS = int(os.environ.get("DREAM_CASES_CAP_CARDS", "3"))
+# Ревизия фазы 3 05.11 (dream-v2.md §14, решение владельца A): нажато 0 из 30 карточек — одна за ночь,
+# только critical/high; дело, которое спарк вернул владельцу (`pending`), проходит при любой цене.
+CAP_CARDS = int(os.environ.get("DREAM_CASES_CAP_CARDS", "1"))
+CARD_MIN_SEV = os.environ.get("DREAM_CASES_CARD_MIN_SEV", "high")
 CAP_SPAWNS = int(os.environ.get("DREAM_CASES_CAP_SPAWNS", "2"))
 STALE_DAYS = int(os.environ.get("DREAM_CASES_STALE_DAYS", "14"))
 # Фаза 3 (mode=on): карточка — мост digest-bot POST /secretary-card, ответ кнопки session-manager
@@ -57,6 +60,13 @@ TG_NOTIFY = f"{HOME}/bin/tg-notify"
 CARD_BUTTONS = [{"key": "ack", "label": "✅ Принял — закрыть"}, {"key": "task", "label": "🛠 Сделай задачу"},
                 {"key": "noise", "label": "🔇 Это шум"}]
 TEAM_REPOS = "vipzal*, vipzal-*, aeroflot-vipzal, sirena-terminal-site, pa-*, persona*, *-widget"
+# Дело командного репо Travelmart спарк закрыть не может (коммиты запрещены): 3 из 21 спарка окна
+# 23.10–04.11 кончились отчётом (§14) — такие дела сразу карточкой.
+TEAM_RE = re.compile(r"travelmart|vipzal|sirena-terminal|order-widget|admin-widget|\bpersona\b|\bpa-[a-z0-9]",
+                     re.IGNORECASE)
+TEAM_TICKET_RE = re.compile(r"\b(?:VIP|PRIS)-\d{3,}")  # ключ задачи Трекера Travelmart
+# Соло-репо, где спарк мержит свой PR сам после зелёных тестов и Codex-ревью (решение владельца 05.11).
+AUTOMERGE_REPOS = "brain-dream, session-manager"
 
 EVIDENCE_PREFIXES = ("decision:", "lesson:", "procedure:", "note:", "project:")
 
@@ -416,6 +426,13 @@ def pending_routes(led):
     return [(c["id"], c["pending"], c.get("severity"), "pending") for c in led.open_cases() if c.get("pending")]
 
 
+def is_team(c):
+    """Дело про командный репо Travelmart: репо, проект или ключ задачи Трекера в заголовке. Факты не смотрим:
+    там Travelmart часто лишь пример среди проектов (на окне §14 по фактам — 2 ложных из 6, по заголовку — 1 из 4)."""
+    title = c.get("title") or ""
+    return bool(TEAM_RE.search(title) or TEAM_TICKET_RE.search(title))
+
+
 def pick_route(p, ver_p):
     """Исполнитель нового дела по сырым вероятностям Jev (кривые §12); без Jev — watch."""
     pa = (p or {}).get("actor") or {}
@@ -437,6 +454,14 @@ def route_all(led, date, routes, m):
         seen.add(cid)
         kind, cap = ("spawn", CAP_SPAWNS) if actor == "agent" else ("card", CAP_CARDS)
         c = led.cases[cid]
+        if kind == "spawn" and why != "pending" and is_team(c):
+            kind, cap = "card", CAP_CARDS
+            led.emit({"date": date, "event": "team_card", "case": cid})
+            m["team_card"] += 1
+        if kind == "card" and why != "pending" and SEV_RANK.get(sev, 4) > SEV_RANK.get(CARD_MIN_SEV, 1):
+            led.emit({"date": date, "event": "quiet_card", "case": cid, "severity": sev, "why": why})
+            m["quiet_card"] += 1
+            continue
         # PR спарка ждёт мержа или спарк уже работал над делом — второй спарк не нужен.
         if c["status"] == "verifying" or (kind == "spawn" and c.get("session") and why != "pending"):
             continue
@@ -499,10 +524,15 @@ SPARK_TASK = """Дело сна v2 {cid} (журнал ~/brain/dreams/.cases, д
 2. Найди репозиторий проблемы в ~/Projects. Командные репо ({team}) — ни коммитов, ни пушей: шаг 4 с `--result report`.
    Нужен владелец (деньги, договоры, люди, юр./налоговое, физическое, продуктовый выбор, перевыпуск ключей) — `--result report`.
 3. Своё соло-репо: ветка `dream/{slug}` в отдельном git worktree, минимальный фикс с тестом, `git push -u origin dream/{slug}`,
-   `gh pr create` с описанием «проблема · до · после» и ссылкой на дело {cid}. PR НЕ мержить (решение владельца 22.10).
+   `gh pr create` с описанием «проблема · до · после» и ссылкой на дело {cid}.
+   Мерж (решение владельца 05.11) — только в {automerge}: полный тест-сьют репо зелёный и
+   `codex review --base main` в worktree без находок уровня bug (находку исправь и прогони заново, не больше 2 кругов).
+   Прошло — `gh pr merge --merge --delete-branch`, затем `git -C ~/Projects/<репо> pull --ff-only`; у session-manager —
+   ещё запись в CHANGELOG.md до мержа и `pnpm run restart` в ~/Projects/session-manager после. Не прошло или другой репо
+   (skvo-controller и прочие) — PR остаётся владельцу, в evidence — что мешает мержу.
    Правка процедуры/знания без репо — через mcp__brain__brain_add, доказательство — id узла (`--result done`).
 4. Итог — ровно одна команда:
-   python3 ~/Projects/brain-dream/tools/dream-cases.py outcome --case {cid} --result <pr|done|report|noise> --evidence "<URL PR | коммит | id узла | одна фраза почему>"
+   DREAM_CASES_MODE=on python3 ~/Projects/brain-dream/tools/dream-cases.py outcome --case {cid} --result <pr|done|report|noise> --evidence "<URL PR | коммит | id узла | одна фраза почему>"
    `noise` — находка ложная или не стоит работы.
 Наружу (люди, деньги, сообщения) ничего не отправлять.
 """
@@ -515,7 +545,7 @@ def spawn_spark(c, date):
     task = f"{STATE}/tasks/{slug}.md"
     with open(task, "w", encoding="utf-8") as f:
         f.write(SPARK_TASK.format(cid=c["id"], title=c["title"], facts="\n\n".join(c["facts"][-3:]),
-                                  team=TEAM_REPOS, slug=slug))
+                                  team=TEAM_REPOS, slug=slug, automerge=AUTOMERGE_REPOS))
     try:
         r = subprocess.run(["bash", SPARK, "--project", "brain-dream", "--name", f"dream-{slug}",
                             "--model", "sonnet", "--effort", "medium", "--task-file", task],

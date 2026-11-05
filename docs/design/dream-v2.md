@@ -396,3 +396,12 @@ Jev ≈ 74 вызова и 170 тыс. токенов за ночь, списо�
    разрез по режиму.
 
 Решение — карточка владельцу `brain-dream-v2-phase3-revision-2026-11-05`.
+
+**Решения владельца 05.11.**
+
+| Карточка | Выбор | Что сделано |
+|---|---|---|
+| `brain-dream-v2-phase3-revision-2026-11-05` | A — on и поправить (`decision:brain-dream-v2-phase3-keep-on-team-card-cap1-2026-11-05`) | `tools/dream-cases.py`: `CAP_CARDS` 1, `CARD_MIN_SEV` high (ниже — событие `quiet_card`); дело с репо, проектом или ключом VIP-/PRIS- Travelmart в заголовке — карточкой вместо спарка (`team_card`; на окне §14 ловит 3 из 4, ложных 1); дело, которое спарк вернул (`pending`), проходит при любой цене; итог спарка пишется с `mode: on` |
+| `brain-dream-spark-pr-merge-2026-11-05` | A — автомерж в brain-dream и session-manager (`decision:brain-dream-spark-pr-automerge-solo-repos-2026-11-05`) | ТЗ спарка: полный сьют зелёный и `codex review --base main` без находок уровня bug → `gh pr merge`; session-manager — CHANGELOG и `pnpm run restart`; прочие репо — PR владельцу |
+
+Перемер — крон session-manager `cron-mw338nyn-399f51`, 19.11 10:00.
