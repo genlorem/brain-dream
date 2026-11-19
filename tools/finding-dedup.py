@@ -37,6 +37,10 @@ sys.path.insert(0, os.environ.get("BRAIN_ENGINE_DIR", os.path.expanduser("~/brai
 import semantic  # noqa: E402 — fastembed MiniLM, normalized vectors
 
 DEFAULT_THRESHOLD = 0.86
+# Одна и та же дыра про один узел (repo:X, decision:Y), пересказанная разными словами, даёт
+# cosine 0.68-0.84 (замер 31.10.2026: 8 находок про repo:vipzal-admin без governed-by).
+ENTITY_THRESHOLD = 0.65
+ENTITY_RE = re.compile(r"\b(?:repo|decision|procedure|project|service):[\w.\-]+")
 CACHE_PATH = os.environ.get("FINDING_EMBED_CACHE") or os.path.expanduser(
     "~/.cache/brain-dream/finding-embed-cache.npz"
 )
@@ -95,6 +99,17 @@ def parse_node(path: str) -> dict:
         "hash": chash.group(1) if chash else "",
         "text": ((title.group(1) if title else "") + ". " + body)[:1500],
     }
+
+
+def shared_entity(a: str, b: str) -> bool:
+    """В обоих текстах назван один и тот же узел Brain."""
+    return bool(set(ENTITY_RE.findall(a)) & set(ENTITY_RE.findall(b)))
+
+
+def is_dup(score: float, cand_text: str, ex_text: str, threshold: float) -> bool:
+    if score >= threshold:
+        return True
+    return score >= min(ENTITY_THRESHOLD, threshold) and shared_entity(cand_text, ex_text)
 
 
 def cluster(nodes: list[dict], vecs: np.ndarray, threshold: float):
@@ -170,7 +185,12 @@ def cmd_check(args) -> None:
         sims = ex_vecs @ cand_vecs[k]
         j = int(np.argmax(sims))
         s = float(sims[j])
-        if s >= args.threshold:
+        # ближайший по смыслу может не назвать узел; ищем лучший среди называющих тот же узел
+        for jj in np.argsort(-sims)[:20]:
+            if is_dup(float(sims[jj]), cands[k][1], existing[int(jj)]["text"], args.threshold):
+                j, s = int(jj), float(sims[jj])
+                break
+        if is_dup(s, cands[k][1], existing[j]["text"], args.threshold):
             print(f"{h}\tDUP\t{existing[j]['id']}\t{s:.3f}")
         else:
             print(f"{h}\tNEW\t-\t{s:.3f}")
