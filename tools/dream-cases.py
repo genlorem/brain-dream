@@ -260,6 +260,7 @@ def parse_top10(date):
     s = t[i:]
     j = re.search(r"\n## (Mermaid|Статистика)", s)
     s = s[:j.start()] if j else s
+    s = re.sub(r"^(\d+)\.\s+\*\*", r"**\1. ", s, flags=re.M)  # «1. **Заголовок**» (11.11) → «**1. …»
     items = []
     rows = re.findall(r"^\|\s*(\d+)\s*\|(.+)$", s, re.M)
     if rows:
@@ -535,7 +536,7 @@ SPARK_TASK = """Дело сна v2 {cid} (журнал ~/brain/dreams/.cases, д
    DREAM_CASES_MODE=on python3 ~/Projects/brain-dream/tools/dream-cases.py outcome --case {cid} --result <pr|done|report|noise> --evidence "<URL PR | коммит | id узла | одна фраза почему>"
    `noise` — находка ложная или не стоит работы.
 5. После `outcome` с результатом pr|done|noise ответа владельца не ждёшь: сразу архивируй свою сессию —
-   curl -sS -X POST localhost:3007/api/session/exit-cc -d '{"sessionId":"<свой sid>"}' (последним действием хода).
+   curl -sS -X POST localhost:3007/api/session/exit-cc -d '{{"sessionId":"<свой sid>"}}' (последним действием хода).
    Результат report — владельцу нужно решение, сессию не закрывать.
 Наружу (люди, деньги, сообщения) ничего не отправлять.
 """
@@ -546,10 +547,10 @@ def spawn_spark(c, date):
     slug = c["id"].split(":", 1)[1]
     os.makedirs(f"{STATE}/tasks", exist_ok=True)
     task = f"{STATE}/tasks/{slug}.md"
-    with open(task, "w", encoding="utf-8") as f:
-        f.write(SPARK_TASK.format(cid=c["id"], title=c["title"], facts="\n\n".join(c["facts"][-3:]),
-                                  team=TEAM_REPOS, slug=slug, automerge=AUTOMERGE_REPOS))
-    try:
+    try:  # ошибка ТЗ или запуска — итог failed, ночь не падает (05–18.11 KeyError ронял run_night)
+        with open(task, "w", encoding="utf-8") as f:
+            f.write(SPARK_TASK.format(cid=c["id"], title=c["title"], facts="\n\n".join(c["facts"][-3:]),
+                                      team=TEAM_REPOS, slug=slug, automerge=AUTOMERGE_REPOS))
         r = subprocess.run(["bash", SPARK, "--project", "brain-dream", "--name", f"dream-{slug}",
                             "--model", "sonnet", "--effort", "medium", "--task-file", task],
                            timeout=600, capture_output=True, text=True)

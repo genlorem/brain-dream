@@ -94,6 +94,18 @@ class ParseTest(Base):
     def test_missing_file(self):
         self.assertEqual(dc.parse_top10("2099-01-01"), [])
 
+    def test_numbered_bold_list_format(self):
+        # формат синтеза 11.11.2026: «1. **Заголовок**», под ним абзац и «Источники:»
+        self.write("2026-11-11", "## Синтез\n\nТоп-10 инсайтов\n\n"
+                   "1. **Govori: биллинг — блокер**\nМеханизм IAP не спроектирован.\n"
+                   "Источники: decision:govori-store-billing-open. non-obvious.\n\n"
+                   "2. **Marquiz: два хрупких физлица**\nДивиденды через ИП.\nИсточники: person:x\n")
+        items = dc.parse_top10("2026-11-11")
+        self.assertEqual([x["n"] for x in items], [1, 2])
+        self.assertEqual(items[0]["title"], "Govori: биллинг — блокер")
+        self.assertEqual(items[0]["body"], "Механизм IAP не спроектирован.")
+        self.assertTrue(items[0]["src"].startswith("decision:govori-store-billing-open"))
+
 
 class NightTest(Base):
     def run_night(self, date, answers, vecs):
@@ -275,6 +287,35 @@ class PhaseThreeTest(NightTest):
         self.write("2026-10-02", "## Синтез\n")
         self.run_night("2026-10-02", [], [])
         self.assertEqual(self.sent, ["case:2026-10-01-1"])
+
+
+class SpawnSparkTest(unittest.TestCase):
+    """Настоящий spawn_spark (без мока): ТЗ рендерится, ошибка запуска не роняет ночь."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.case = {"id": "case:2026-11-05-4", "title": "дело {с фигурными}", "facts": ["факт {x}"]}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_task_file_renders_and_spark_called(self):
+        done = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(dc, "STATE", self.tmp.name), \
+                mock.patch("subprocess.run", return_value=done) as run:
+            r = dc.spawn_spark(self.case, "2026-11-05")
+        self.assertEqual(r["result"], "spawned")
+        run.assert_called_once()
+        task = Path(self.tmp.name, "tasks", "2026-11-05-4.md").read_text(encoding="utf-8")
+        self.assertIn("case:2026-11-05-4", task)
+        self.assertIn('{"sessionId":', task)  # JSON примера exit-cc дошёл до ТЗ как есть
+
+    def test_render_error_is_failed_not_crash(self):
+        with mock.patch.object(dc, "STATE", self.tmp.name), \
+                mock.patch.object(dc, "SPARK_TASK", "{нет_ключа}"), mock.patch("subprocess.run") as run:
+            r = dc.spawn_spark(self.case, "2026-11-05")
+        self.assertEqual(r["result"], "failed")
+        run.assert_not_called()
 
 
 if __name__ == "__main__":
